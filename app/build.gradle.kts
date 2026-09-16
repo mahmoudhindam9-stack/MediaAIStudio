@@ -26,12 +26,15 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
-      if (keystorePath != null && file(keystorePath).exists()) {
-          storeFile = file(keystorePath)
-          storePassword = System.getenv("RELEASE_STORE_PASSWORD")
-          keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-          keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+      val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH").orEmpty().trim()
+      val storePassword = System.getenv("RELEASE_STORE_PASSWORD").orEmpty()
+      val keyAliasValue = System.getenv("RELEASE_KEY_ALIAS").orEmpty().trim()
+      val keyPassword = System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
+      if (keystorePath.isNotEmpty() && storePassword.isNotEmpty() && keyAliasValue.isNotEmpty() && keyPassword.isNotEmpty()) {
+        storeFile = file(keystorePath)
+        this.storePassword = storePassword
+        keyAlias = keyAliasValue
+        this.keyPassword = keyPassword
       }
     }
     create("debugConfig") {
@@ -42,12 +45,23 @@ android {
     }
   }
 
+  val hasProductionSigning = listOf(
+    System.getenv("RELEASE_KEYSTORE_PATH").orEmpty().trim(),
+    System.getenv("RELEASE_STORE_PASSWORD").orEmpty(),
+    System.getenv("RELEASE_KEY_ALIAS").orEmpty().trim(),
+    System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
+  ).all { it.isNotEmpty() }
+
   buildTypes {
     release {
       isCrunchPngs = false
       isMinifyEnabled = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      signingConfig = if (hasProductionSigning) {
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.getByName("debugConfig")
+      }
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
@@ -57,7 +71,7 @@ android {
   }
 
   lint {
-      abortOnError = false
+    abortOnError = false
   }
 
   buildFeatures {
@@ -130,7 +144,7 @@ dependencies {
   implementation(libs.tensorflow.lite.gpu)
 
   implementation(libs.tensorflow.lite.support) {
-      exclude(group = "org.tensorflow", module = "tensorflow-lite-support-api")
+    exclude(group = "org.tensorflow", module = "tensorflow-lite-support-api")
   }
 
   testImplementation(libs.androidx.compose.ui.test.junit4)
