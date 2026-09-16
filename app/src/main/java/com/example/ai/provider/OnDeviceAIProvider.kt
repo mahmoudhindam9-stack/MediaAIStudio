@@ -6,29 +6,29 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.Paint
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import com.example.ai.core.*
-
 import com.example.ai.image.inpainting.LaMaInpaintingEngine
 import com.example.ai.image.upscale.RealEsrganUpscaleEngine
 import com.example.ai.image.enhancement.CpgaLowLightEngine
-
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-class OnDeviceAIProvider(private val context: Context) : AIProvider {
+class OnDeviceAIProvider(context: Context) : AIProvider {
+    private val appContext = context.applicationContext
     override val type = AIProviderType.ON_DEVICE
     override val isAvailable = true 
 
@@ -54,11 +54,16 @@ class OnDeviceAIProvider(private val context: Context) : AIProvider {
                 is AIRequest.BackgroundRemoval -> {
                     try {
                         val cacheFileName = "ai_bg_remove_${request.sourceUri.hashCode()}.png"
-                        val cacheFile = File(context.cacheDir, cacheFileName)
+                        val cacheFile = File(appContext.cacheDir, cacheFileName)
                         if (cacheFile.exists()) {
                             onProgress(AIProgress(1.0f, "Loaded from Cache"))
+                            val cachedUri = FileProvider.getUriForFile(
+                                appContext,
+                                "${appContext.packageName}.fileprovider",
+                                cacheFile
+                            )
                             return@withContext AIResult.Success(
-                                outputUri = Uri.fromFile(cacheFile).toString(),
+                                outputUri = cachedUri.toString(),
                                 processingType = "BackgroundRemoval",
                                 providerUsed = AIProviderType.ON_DEVICE
                             )
@@ -81,30 +86,41 @@ class OnDeviceAIProvider(private val context: Context) : AIProvider {
                                 foreground.compress(Bitmap.CompressFormat.PNG, 100, out)
                             }
                             onProgress(AIProgress(1.0f, "Complete"))
+                            val contentUri = FileProvider.getUriForFile(
+                                appContext,
+                                "${appContext.packageName}.fileprovider",
+                                cacheFile
+                            )
                             AIResult.Success(
-                                outputUri = Uri.fromFile(cacheFile).toString(),
+                                outputUri = contentUri.toString(),
                                 processingType = "BackgroundRemoval",
                                 providerUsed = AIProviderType.ON_DEVICE
                             )
                         } else {
                             AIResult.Error(AIError.ProcessingFailure)
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        e.printStackTrace()
-                        AIResult.Error(AIError.Unknown(e.message ?: "Unknown error"))
+                        AIResult.Error(AIError.Unknown(e.message ?: "Background removal failed"))
                     }
                 }
                 is AIRequest.DetectObjects -> {
                     try {
                         val cacheFileName = "ai_obj_detect_${request.sourceUri.hashCode()}.jpg"
-                        val cacheFile = File(context.cacheDir, cacheFileName)
-                        val metaCacheFile = File(context.cacheDir, "${cacheFileName}_meta.txt")
+                        val cacheFile = File(appContext.cacheDir, cacheFileName)
+                        val metaCacheFile = File(appContext.cacheDir, "${cacheFileName}_meta.txt")
                         
                         if (cacheFile.exists() && metaCacheFile.exists()) {
                             onProgress(AIProgress(1.0f, "Loaded from Cache"))
                             val cachedMeta = metaCacheFile.readText()
+                            val cachedUri = FileProvider.getUriForFile(
+                                appContext,
+                                "${appContext.packageName}.fileprovider",
+                                cacheFile
+                            )
                             return@withContext AIResult.Success(
-                                outputUri = Uri.fromFile(cacheFile).toString(),
+                                outputUri = cachedUri.toString(),
                                 processingType = "ObjectDetection",
                                 providerUsed = AIProviderType.ON_DEVICE,
                                 metadata = mapOf("detections" to cachedMeta)
@@ -153,28 +169,34 @@ class OnDeviceAIProvider(private val context: Context) : AIProvider {
                         metaCacheFile.writeText(metaBuilder.toString())
 
                         onProgress(AIProgress(1.0f, "Complete"))
+                        val contentUri = FileProvider.getUriForFile(
+                            appContext,
+                            "${appContext.packageName}.fileprovider",
+                            cacheFile
+                        )
                         AIResult.Success(
-                            outputUri = Uri.fromFile(cacheFile).toString(),
+                            outputUri = contentUri.toString(),
                             processingType = "ObjectDetection",
                             providerUsed = AIProviderType.ON_DEVICE,
                             metadata = mapOf("detections" to metaBuilder.toString())
                         )
 
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        e.printStackTrace()
-                        AIResult.Error(AIError.Unknown(e.message ?: "Unknown error"))
+                        AIResult.Error(AIError.Unknown(e.message ?: "Object detection failed"))
                     }
                 }
                 
                 is AIRequest.ObjectRemoval -> {
-                    com.example.ai.image.inpainting.LaMaInpaintingEngine(context).process(request.sourceUri, request.maskData, onProgress)
+                    LaMaInpaintingEngine(appContext).process(request.sourceUri, request.maskData, onProgress)
                 }
                 is AIRequest.Upscale -> {
-                    com.example.ai.image.upscale.RealEsrganUpscaleEngine(context).process(request.sourceUri, request.scaleFactor, onProgress)
+                    RealEsrganUpscaleEngine(appContext).process(request.sourceUri, request.scaleFactor, onProgress)
                 }
                 is AIRequest.Enhance -> {
-                    if (request.enhanceType == "low_light") {
-                        com.example.ai.image.enhancement.CpgaLowLightEngine(context).process(request.sourceUri, onProgress)
+                    if (request.enhanceType == "low_light" || request.enhanceType == "auto") {
+                        CpgaLowLightEngine(appContext).process(request.sourceUri, onProgress)
                     } else {
                         AIResult.Error(AIError.ModelUnavailable)
                     }
@@ -186,16 +208,12 @@ class OnDeviceAIProvider(private val context: Context) : AIProvider {
 
     private fun getBitmap(uri: Uri): Bitmap {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(appContext.contentResolver, uri)) { decoder, _, _ ->
                 decoder.isMutableRequired = true
             }
         } else {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, uri))
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-                }
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.getBitmap(appContext.contentResolver, uri)
         }
     }
 }

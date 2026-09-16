@@ -42,7 +42,7 @@ fun HomeScreen(navController: NavController) {
                 },
                 actions = {
                     IconButton(onClick = { navController.navigate(Screen.Settings) }) {
-                        Icon(Icons.Default.AccountCircle, contentDescription = "Settings", modifier = Modifier.size(32.dp))
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(id = R.string.nav_settings), modifier = Modifier.size(32.dp))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

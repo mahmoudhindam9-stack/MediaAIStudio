@@ -17,6 +17,7 @@ import com.example.ai.provider.*
 import com.example.ai.image.*
 import com.example.ai.assistant.*
 import com.example.ai.generative.*
+import com.example.ai.model.AppModelManager
 
 class PhotoEditorViewModel(application: Application) : AndroidViewModel(application) {
     val state = MutableStateFlow(EditorState())
@@ -27,7 +28,9 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
     val aiAssistant = AIAssistant()
     val previewAiResultUri = MutableStateFlow<String?>(null)
     val previewBitmap = MutableStateFlow<Bitmap?>(null)
-
+    val modelManager = AppModelManager(application)
+    val modelStates = modelManager.artifacts.states
+    private var isProcessing = false
 
     val originalBitmap = MutableStateFlow<Bitmap?>(null)
     
@@ -45,12 +48,8 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
                     decoder.isMutableRequired = true
                 }
             } else {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, uri))
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-                }
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
             }
             originalBitmap.value = bitmap
         }
@@ -65,66 +64,74 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
     
     fun undo() {
-        if (historyIndex > 0) {
+        if (canUndo()) {
             historyIndex--
-            state.value = history[historyIndex]
+            state.value = history[historyIndex].copy()
         }
     }
     
     fun redo() {
-        if (historyIndex < history.size - 1) {
+        if (canRedo()) {
             historyIndex++
-            state.value = history[historyIndex]
+            state.value = history[historyIndex].copy()
         }
     }
+    
+    fun canUndo(): Boolean = historyIndex > 0
+    fun canRedo(): Boolean = historyIndex < history.size - 1
     
     fun updateState(transform: (EditorState) -> EditorState) {
         state.value = transform(state.value)
     }
-    
+
     fun commitState() {
         pushHistory()
     }
     
-    // Draw
-    private var currentDrawingPath = mutableListOf<PointF>()
-    fun startDrawing(point: PointF) {
-        currentDrawingPath = mutableListOf(point)
+    fun startDrawing(startPoint: PointF, color: Int = android.graphics.Color.RED, strokeWidth: Float = 5f) {
+        val newDrawing = Drawing(path = listOf(startPoint), color = color, strokeWidth = strokeWidth)
+        updateState { it.copy(drawings = it.drawings + newDrawing) }
     }
+
     fun addDrawingPoint(point: PointF) {
-        currentDrawingPath.add(point)
-        val newDrawing = Drawing(currentDrawingPath.toList(), android.graphics.Color.RED, 0.01f)
         val drawings = state.value.drawings.toMutableList()
-        if (drawings.isNotEmpty() && drawings.last().path.first() == currentDrawingPath.first()) {
-            drawings[drawings.lastIndex] = newDrawing
-        } else {
-            drawings.add(newDrawing)
+        if (drawings.isNotEmpty()) {
+            val last = drawings.last()
+            drawings[drawings.size - 1] = last.copy(path = last.path + point)
+            state.value = state.value.copy(drawings = drawings)
         }
-        state.value = state.value.copy(drawings = drawings)
     }
+
     fun endDrawing() {
         commitState()
     }
-    
-    // Text
+
     fun addText(text: String) {
-        val newText = TextOverlay(text = text, x = 0.5f, y = 0.5f, color = android.graphics.Color.WHITE, size = 0.1f)
+        val newText = TextOverlay(text = text, x = 0.5f, y = 0.5f, color = android.graphics.Color.WHITE, size = 24f)
         updateState { it.copy(texts = it.texts + newText) }
         commitState()
     }
+
+    fun updateText(id: String, text: String) {
+        val texts = state.value.texts.map {
+            if (it.id == id) it.copy(text = text) else it
+        }
+        state.value = state.value.copy(texts = texts)
+    }
+
     fun moveText(id: String, dx: Float, dy: Float) {
         val texts = state.value.texts.map {
             if (it.id == id) it.copy(x = it.x + dx, y = it.y + dy) else it
         }
         state.value = state.value.copy(texts = texts)
     }
-    
-    // Sticker
+
     fun addSticker(emoji: String) {
-        val newSticker = Sticker(emoji = emoji, x = 0.5f, y = 0.5f, scale = 0.2f)
+        val newSticker = Sticker(emoji = emoji, x = 0.5f, y = 0.5f, scale = 1f)
         updateState { it.copy(stickers = it.stickers + newSticker) }
         commitState()
     }
+
     fun moveSticker(id: String, dx: Float, dy: Float) {
         val stickers = state.value.stickers.map {
             if (it.id == id) it.copy(x = it.x + dx, y = it.y + dy) else it
@@ -132,41 +139,72 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
         state.value = state.value.copy(stickers = stickers)
     }
 
-    fun processAITool(request: AIRequest) {
-        viewModelScope.launch(Dispatchers.IO) {
-            aiProgress.value = AIProgress(0f, "Preparing...")
+    fun downloadModel(id: String) {
+        if (isProcessing) return
+        viewModelScope.launch {
+            aiProgress.value = AIProgress(0f, "Starting download...")
             aiError.value = null
-            val result = aiEngine.processImage(request) { progress ->
-                aiProgress.value = progress
+            modelManager.downloadModel(id) { pct ->
+                aiProgress.value = AIProgress(pct / 100f, "Downloading model: $pct%")
+            }.onSuccess {
+                aiProgress.value = null
+            }.onFailure { e ->
+                aiProgress.value = null
+                aiError.value = "Failed to download model: ${e.message}"
             }
-            aiProgress.value = null
-            when (result) {
-                is AIResult.Success -> {
-                    previewAiResultUri.value = result.outputUri
-                    val previewUri = Uri.parse(result.outputUri)
-                    val context = getApplication<Application>()
-                    try {
-                        val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, previewUri)) { decoder, _, _ -> decoder.isMutableRequired = true }
-                        } else {
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                                android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, previewUri))
+        }
+    }
+
+    fun processAITool(request: AIRequest) {
+        if (isProcessing) return
+        viewModelScope.launch(Dispatchers.IO) {
+            isProcessing = true
+            try {
+                // Pre-check for on-device models
+                val requiredModel = when (request) {
+                    is AIRequest.ObjectRemoval -> "llama/inpainting_lama_2025jan"
+                    is AIRequest.Upscale -> "realesrgan_x2plus"
+                    is AIRequest.Enhance -> "cpga_fp16"
+                    else -> null
+                }
+                if (requiredModel != null && !modelManager.isInstalled(requiredModel)) {
+                    aiError.value = "Model is not installed. Please download it first."
+                    return@launch
+                }
+
+                aiProgress.value = AIProgress(0f, "Preparing...")
+                aiError.value = null
+                val result = aiEngine.processImage(request) { progress ->
+                    aiProgress.value = progress
+                }
+                aiProgress.value = null
+                when (result) {
+                    is AIResult.Success -> {
+                        previewAiResultUri.value = result.outputUri
+                        val previewUri = Uri.parse(result.outputUri)
+                        val context = getApplication<Application>()
+                        try {
+                            val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, previewUri)) { decoder, _, _ -> decoder.isMutableRequired = true }
                             } else {
                                 @Suppress("DEPRECATION")
                                 MediaStore.Images.Media.getBitmap(context.contentResolver, previewUri)
                             }
+                            previewBitmap.value = b
+                        } catch (e: Exception) {
+                            aiError.value = e.message
                         }
-                        previewBitmap.value = b
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    }
+                    is AIResult.Error -> {
+                        aiError.value = result.error.message
                     }
                 }
-                is AIResult.Error -> {
-                    aiError.value = result.error.message
-                }
+            } finally {
+                isProcessing = false
             }
         }
     }
+
     fun processAssistantInstruction(instruction: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val action = aiAssistant.processInstruction(instruction)
@@ -183,6 +221,7 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
     }
+
     fun acceptAiResult() {
         previewAiResultUri.value?.let { 
             setUri(it)
@@ -190,42 +229,9 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
             previewBitmap.value = null
         }
     }
+
     fun discardAiResult() {
         previewAiResultUri.value = null
-            previewBitmap.value = null
+        previewBitmap.value = null
     }
-    fun clearAiError() {
-        aiError.value = null
-    }
-
-    fun runGenerativeImage(type: GenerativeType, prompt: String, maskUri: String? = null) {
-        val s = state.value
-        val uri = s.uriString.ifEmpty { null } ?: return
-        val req = GenerativeRequest(
-            type = type,
-            sourceUri = Uri.parse(uri),
-            maskUri = maskUri?.let { Uri.parse(it) },
-            prompt = prompt
-        )
-        val jobId = generativeEngine.submitJob(req)
-        viewModelScope.launch {
-            generativeEngine.jobs.collect { jobs ->
-                val job = jobs[jobId]
-                if (job != null) {
-                    if (job.state == JobState.FAILED) {
-                        aiError.value = job.message
-                    } else if (job.state == JobState.PROCESSING || job.state == JobState.PREPARING) {
-                        aiProgress.value = AIProgress(job.progress, job.message)
-                    } else if (job.state == JobState.COMPLETED) {
-                        aiProgress.value = null
-                        val res = job.result
-                        if (res is GenerativeResult.Success) {
-                            previewAiResultUri.value = res.outputUri.toString()
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
 }

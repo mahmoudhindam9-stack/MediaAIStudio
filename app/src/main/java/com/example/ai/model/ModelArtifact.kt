@@ -9,5 +9,7 @@ data class ModelArtifact(
     val minimumBytes: Long,
     val license: String,
     val source: String,
-    val runtime: String
+    val runtime: String,
+    val expectedInputs: Set<String> = emptySet(),
+    val expectedOutputs: Set<String> = emptySet()
 )

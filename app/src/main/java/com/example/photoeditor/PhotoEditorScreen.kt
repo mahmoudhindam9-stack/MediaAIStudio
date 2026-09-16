@@ -436,14 +436,16 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                     val aiProgress by viewModel.aiProgress.collectAsState()
                     val aiError by viewModel.aiError.collectAsState()
                     val previewAiUri by viewModel.previewAiResultUri.collectAsState()
+                    val modelStates by viewModel.modelStates.collectAsState()
                     
                     if (aiProgress != null) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(aiProgress?.statusMessage ?: stringResource(R.string.ai_processing), color = Color.White)
                         }
                     } else if (previewAiUri != null) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                             Text("Previewing AI Result", color = Color.Yellow)
                             Row {
                                 Button(onClick = { viewModel.acceptAiResult() }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_apply)) }
@@ -451,12 +453,55 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                             }
                         }
                     } else {
-                        LazyRow(modifier = Modifier.fillMaxWidth()) {
-                            item { Button(onClick = { viewModel.processAITool(AIRequest.BackgroundRemoval(state.uriString)) }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_background_removal)) } }
-                            item { Button(onClick = { viewModel.processAITool(AIRequest.DetectObjects(state.uriString)) }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_object_detection)) } }
+                        val enhanceState = modelStates["cpga_fp16"]?.state ?: com.example.ai.model.ModelInstallState.NOT_INSTALLED
+                        val upscaleState = modelStates["realesrgan_x2plus"]?.state ?: com.example.ai.model.ModelInstallState.NOT_INSTALLED
 
-                            item { Button(onClick = { viewModel.processAITool(AIRequest.Enhance(state.uriString, "auto")) }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_enhance)) } }
-                            item { Button(onClick = { viewModel.processAITool(AIRequest.Upscale(state.uriString, 2)) }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_upscale)) } }
+                        LazyRow(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            item {
+                                Button(onClick = { viewModel.processAITool(AIRequest.BackgroundRemoval(state.uriString)) }, modifier = Modifier.padding(4.dp)) {
+                                    Text(stringResource(R.string.ai_background_removal))
+                                }
+                            }
+                            item {
+                                Button(onClick = { viewModel.processAITool(AIRequest.DetectObjects(state.uriString)) }, modifier = Modifier.padding(4.dp)) {
+                                    Text(stringResource(R.string.ai_object_detection))
+                                }
+                            }
+
+                            item {
+                                if (enhanceState == com.example.ai.model.ModelInstallState.READY) {
+                                    Button(onClick = { viewModel.processAITool(AIRequest.Enhance(state.uriString, "auto")) }, modifier = Modifier.padding(4.dp)) {
+                                        Text(stringResource(R.string.ai_enhance))
+                                    }
+                                } else {
+                                    val isDownloading = enhanceState == com.example.ai.model.ModelInstallState.DOWNLOADING || enhanceState == com.example.ai.model.ModelInstallState.VERIFYING
+                                    Button(
+                                        onClick = { viewModel.downloadModel("cpga_fp16") },
+                                        enabled = !isDownloading,
+                                        modifier = Modifier.padding(4.dp)
+                                    ) {
+                                        Text(if (isDownloading) "Downloading Enhance..." else "Download Enhance")
+                                    }
+                                }
+                            }
+
+                            item {
+                                if (upscaleState == com.example.ai.model.ModelInstallState.READY) {
+                                    Button(onClick = { viewModel.processAITool(AIRequest.Upscale(state.uriString, 2)) }, modifier = Modifier.padding(4.dp)) {
+                                        Text(stringResource(R.string.ai_upscale))
+                                    }
+                                } else {
+                                    val isDownloading = upscaleState == com.example.ai.model.ModelInstallState.DOWNLOADING || upscaleState == com.example.ai.model.ModelInstallState.VERIFYING
+                                    Button(
+                                        onClick = { viewModel.downloadModel("realesrgan_x2plus") },
+                                        enabled = !isDownloading,
+                                        modifier = Modifier.padding(4.dp)
+                                    ) {
+                                        Text(if (isDownloading) "Downloading Upscale..." else "Download Upscale")
+                                    }
+                                }
+                            }
+
                             item { 
                                 var prompt by remember { mutableStateOf("") }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
