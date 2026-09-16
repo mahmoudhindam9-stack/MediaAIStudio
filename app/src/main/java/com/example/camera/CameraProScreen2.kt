@@ -89,7 +89,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
+import com.example.ai.core.AIResult
 import com.example.ai.image.enhancement.CpgaLowLightEngine
+import com.example.ai.image.upscale.RealEsrganUpscaleEngine
 import com.example.core.permission.PermissionManagerImpl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,7 +104,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 private enum class CameraMode(val label: String) {
-    PHOTO("PHOTO"), PORTRAIT("PORTRAIT"), NIGHT("NIGHT"), HDR("HDR"), VIDEO("VIDEO"), SLOW_MO("SLOW-MO")
+    PHOTO("PHOTO"), PORTRAIT("PORTRAIT"), NIGHT("NIGHT"), HDR("HDR"), AI("AI"), VIDEO("VIDEO"), SLOW_MO("SLOW-MO")
 }
 
 @Composable
@@ -186,15 +188,9 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         try {
             val future = ExtensionsManager.getInstanceAsync(context, p)
             future.addListener({
-                try {
-                    extensionsManager = future.get()
-                } catch (_: Exception) {
-                    extensionsManager = null
-                }
+                try { extensionsManager = future.get() } catch (_: Exception) { extensionsManager = null }
             }, ContextCompat.getMainExecutor(context))
-        } catch (_: Exception) {
-            extensionsManager = null
-        }
+        } catch (_: Exception) { extensionsManager = null }
     }
 
     DisposableEffect(Unit) {
@@ -330,7 +326,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                 if (mode == CameraMode.VIDEO || mode == CameraMode.SLOW_MO) { torch = !torch; camera?.cameraControl?.enableTorch(torch) }
                 else { flashMode = when (flashMode) { ImageCapture.FLASH_MODE_OFF -> ImageCapture.FLASH_MODE_ON; ImageCapture.FLASH_MODE_ON -> ImageCapture.FLASH_MODE_AUTO; else -> ImageCapture.FLASH_MODE_OFF }; capture?.flashMode = flashMode }
             }) { Icon(if (torch || flashMode == ImageCapture.FLASH_MODE_ON) Icons.Default.FlashOn else if (flashMode == ImageCapture.FLASH_MODE_AUTO) Icons.Default.FlashAuto else Icons.Default.FlashOff, null, tint = Color.White) }
-            Text(if (mode == CameraMode.SLOW_MO) "${slowFps} FPS" else String.format(Locale.US, "%.1fx", zoom), color = Color.White, fontWeight = FontWeight.Bold)
+            Text(if (mode == CameraMode.SLOW_MO) "${slowFps} FPS" else if (mode == CameraMode.AI) "AI" else String.format(Locale.US, "%.1fx", zoom), color = Color.White, fontWeight = FontWeight.Bold)
             TextButton(onClick = { faceFocus = !faceFocus }) { Text("FACE", color = if (faceFocus) Color.Cyan else Color.White.copy(alpha = 0.5f), fontWeight = FontWeight.Bold) }
             IconButton(enabled = canSwitch && !isRecording, onClick = { lens = if (lens == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK }) { Icon(Icons.Default.Cameraswitch, null, tint = Color.White) }
         }
@@ -349,6 +345,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Grid", color = Color.White, modifier = Modifier.weight(1f)); TextButton(onClick = { grid = !grid }) { Text(if (grid) "ON" else "OFF", color = if (grid) Color.Yellow else Color.White) } }
                 exposureRange?.let { r -> Row(verticalAlignment = Alignment.CenterVertically) { Text("EV", color = Color.White, modifier = Modifier.weight(1f)); TextButton(onClick = { exposure = (exposure - 1).coerceIn(r.lower,r.upper); camera?.cameraControl?.setExposureCompensationIndex(exposure) }) { Text("−", color = Color.White) }; Text(exposure.toString(), color = Color.White); TextButton(onClick = { exposure = (exposure + 1).coerceIn(r.lower,r.upper); camera?.cameraControl?.setExposureCompensationIndex(exposure) }) { Text("+", color = Color.White) } } }
                 if (mode == CameraMode.PORTRAIT && !bokehAvailable) Row(verticalAlignment = Alignment.CenterVertically) { Text("Blur", color = Color.White, modifier = Modifier.weight(1f)); TextButton(onClick = { blurStrength = (blurStrength - .1f).coerceAtLeast(0f) }) { Text("−", color = Color.White) }; Text("${(blurStrength*100).toInt()}%", color = Color.White); TextButton(onClick = { blurStrength = (blurStrength + .1f).coerceAtMost(1f) }) { Text("+", color = Color.White) } }
+                if (mode == CameraMode.AI) Row(verticalAlignment = Alignment.CenterVertically) { Text("AI Enhance", color = Color.White, modifier = Modifier.weight(1f)); Text("Low-light + 2x", color = Color.Yellow) }
                 if (mode == CameraMode.SLOW_MO) Row(verticalAlignment = Alignment.CenterVertically) { Text("Slow", color = Color.White, modifier = Modifier.weight(1f)); supportedSlowFps.forEach { f -> TextButton(onClick = { slowFps = f }) { Text("${f}", color = if (slowFps == f) Color.Yellow else Color.White) } } }
                 Row { listOf(1f,2f,3f).filter { it <= maxZoom + .01f }.forEach { z -> TextButton(onClick = { val v=z.coerceIn(minZoom,maxZoom); camera?.cameraControl?.setZoomRatio(v); zoom=v }) { Text("${z.toInt()}x", color = Color.White) } } }
             }
@@ -400,9 +397,15 @@ private suspend fun capturePhoto(capture: ImageCapture?, context: Context, mode:
                     CameraMode.PORTRAIT -> if (blur > 0f) try { PortraitBlurProcessor.process(context, uri.toString(), blur) } catch (_: Exception) { uri.toString() } else uri.toString()
                     CameraMode.NIGHT -> try {
                         when (val ai = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }) {
-                            is com.example.ai.core.AIResult.Success -> ai.outputUri
+                            is AIResult.Success -> ai.outputUri
                             else -> uri.toString()
                         }
+                    } catch (_: Exception) { uri.toString() }
+                    CameraMode.AI -> try {
+                        val lowLight = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }
+                        val enhancedUri = (lowLight as? AIResult.Success)?.outputUri ?: uri.toString()
+                        val upscale = RealEsrganUpscaleEngine(context.applicationContext).process(enhancedUri, 2, { })
+                        (upscale as? AIResult.Success)?.outputUri ?: enhancedUri
                     } catch (_: Exception) { uri.toString() }
                     else -> uri.toString()
                 }
