@@ -183,7 +183,18 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
 
     LaunchedEffect(provider) {
         val p = provider ?: return@LaunchedEffect
-        try { extensionsManager = ExtensionsManager.getInstance(context, p) } catch (_: Exception) { extensionsManager = null }
+        try {
+            val future = ExtensionsManager.getInstanceAsync(context, p)
+            future.addListener({
+                try {
+                    extensionsManager = future.get()
+                } catch (_: Exception) {
+                    extensionsManager = null
+                }
+            }, ContextCompat.getMainExecutor(context))
+        } catch (_: Exception) {
+            extensionsManager = null
+        }
     }
 
     DisposableEffect(Unit) {
@@ -196,7 +207,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         }
     }
 
-    LaunchedEffect(provider, lens, mode, slowFps) {
+    LaunchedEffect(provider, extensionsManager, lens, mode, slowFps) {
         val p = provider ?: return@LaunchedEffect
         try {
             val selector = CameraSelector.Builder().requireLensFacing(lens).build()
