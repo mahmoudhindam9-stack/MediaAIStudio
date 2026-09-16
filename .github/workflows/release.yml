@@ -46,20 +46,20 @@ jobs:
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          set +e
+          set -o pipefail
+          if [ -n "$RELEASE_KEYSTORE_PATH" ] && [ -n "$RELEASE_STORE_PASSWORD" ] && [ -n "$RELEASE_KEY_ALIAS" ] && [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            echo "Production signing credentials detected."
+            echo "release_signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Production signing credentials are not configured; release APK will be debug-signed for development distribution."
+            echo "release_signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
           gradle :app:assembleRelease --stacktrace 2>&1 | tee release-build.log
           status=${PIPESTATUS[0]}
-          if [ "$status" -eq 0 ] && compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null; then
-            echo "asset_glob=app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
-            echo "release_signed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Release signing/build was not available; creating a clearly labeled debug development release instead." | tee -a release-build.log
-          gradle :app:assembleDebug --stacktrace 2>&1 | tee -a release-build.log
-          status=${PIPESTATUS[0]}
           test "$status" -eq 0
-          echo "asset_glob=app/build/outputs/apk/debug/*.apk" >> "$GITHUB_OUTPUT"
-          echo "release_signed=false" >> "$GITHUB_OUTPUT"
+          compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null
+          echo "asset_glob=app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
 
       - name: Read app version
         id: version
@@ -80,25 +80,29 @@ jobs:
           VERSION_CODE: ${{ steps.version.outputs.code }}
         run: |
           tag="v${VERSION_NAME}"
+          apk=$(compgen -G "$ASSET_GLOB" | head -n1)
+          test -n "$apk"
+
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; nothing to republish."
+            echo "Release $tag already exists; uploading the rebuilt APK to it."
+            gh release upload "$tag" "$apk" --clobber
             exit 0
           fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git rev-parse "$tag" >/dev/null 2>&1; then
             git tag -a "$tag" -m "MediaAIStudio $VERSION_NAME"
             git push origin "$tag"
           fi
-          apk=$(compgen -G "$ASSET_GLOB" | head -n1)
-          test -n "$apk"
+
           if [ "$SIGNED" = "true" ]; then
             title="MediaAIStudio $VERSION_NAME"
             notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\n\nDedicated on-device AI camera mode added. AI capture applies the existing CPGA low-light enhancement and Real-ESRGAN 2x pipeline."
             gh release create "$tag" "$apk" --title "$title" --notes "$notes"
           else
             title="MediaAIStudio $VERSION_NAME — Development Build"
-            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\n\nDevelopment release: the production signing credentials were not available in GitHub Actions, so this release contains the debug-signed APK. It is not intended to replace an existing production-signed installation.\n\nCamera: dedicated on-device AI mode using the existing CPGA low-light and Real-ESRGAN 2x pipeline."
+            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\n\nDevelopment release: production signing credentials are not configured in GitHub Actions, so this APK is debug-signed and is not intended to replace an existing production-signed installation.\n\nCamera: dedicated on-device AI mode using the existing CPGA low-light and Real-ESRGAN 2x pipeline."
             gh release create "$tag" "$apk" --prerelease --title "$title" --notes "$notes"
           fi
 
