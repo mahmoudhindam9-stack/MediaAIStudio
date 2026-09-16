@@ -25,7 +25,7 @@ import androidx.navigation.toRoute
 import com.example.home.HomeScreen
 import com.example.settings.SettingsScreen
 import com.example.update.ui.UpdateScreen
-import com.example.camera.CameraScreen
+import com.example.camera.CameraProScreen
 import com.example.media.LibraryScreen
 import com.example.media.MediaDetailScreen
 import com.example.photoeditor.PhotoEditorScreen
@@ -51,7 +51,7 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
                 HomeScreen(navController)
             }
             composable<Screen.Camera> {
-                CameraScreen(
+                CameraProScreen(
                     onMediaCaptured = { uriString ->
                         navController.navigate(Screen.MediaDetail(uriString))
                     }
@@ -83,9 +83,7 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
                 PhotoEditorScreen(
                     uriString = photoEditor.uriString,
                     onBack = { navController.navigateUp() },
-                    onExported = { uriString ->
-                        navController.navigateUp()
-                    }
+                    onExported = { navController.navigateUp() }
                 )
             }
             composable<Screen.VideoEditor> { backStackEntry ->
@@ -93,9 +91,7 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
                 com.example.videoeditor.ui.VideoEditorScreen(
                     uriString = videoEditor.uriString,
                     onBack = { navController.navigateUp() },
-                    onExported = { uriString ->
-                        navController.navigateUp()
-                    }
+                    onExported = { navController.navigateUp() }
                 )
             }
             composable<Screen.AITools> {
@@ -104,11 +100,8 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
             composable<Screen.Projects> {
                 ProjectsPlaceholder()
             }
-            
             composable<Screen.Update> {
-                UpdateScreen(
-                    onBack = { navController.navigateUp() }
-                )
+                UpdateScreen(onBack = { navController.navigateUp() })
             }
             composable<Screen.Settings> {
                 SettingsScreen(
@@ -125,7 +118,6 @@ fun AppBottomNavigation(navController: NavController) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    // Define top-level routes
     val items = listOf(
         Triple(Screen.Home, stringResource(R.string.nav_home), Icons.Default.Home),
         Triple(Screen.Library, stringResource(R.string.nav_library), Icons.Default.PhotoLibrary),
@@ -135,14 +127,15 @@ fun AppBottomNavigation(navController: NavController) {
 
     val currentRoute = currentDestination?.route
     val isTopLevel = currentRoute?.contains("Home") == true ||
-            currentRoute?.contains("Library") == true ||
-            currentRoute?.contains("AITools") == true ||
-            currentRoute?.contains("Projects") == true
+        currentRoute?.contains("Library") == true ||
+        currentRoute?.contains("AITools") == true ||
+        currentRoute?.contains("Projects") == true
 
     if (isTopLevel) {
         NavigationBar {
             items.forEach { (screen, title, icon) ->
-                val selected = currentRoute?.contains(screen::class.simpleName ?: "") == true
+                val selected = currentDestination?.hierarchy?.any { it.route == screen::class.qualifiedName } == true ||
+                    currentRoute?.contains(screen::class.simpleName ?: "") == true
                 NavigationBarItem(
                     icon = { Icon(icon, contentDescription = title) },
                     label = { Text(title) },
