@@ -167,14 +167,14 @@ class OnDeviceAIProvider(private val context: Context) : AIProvider {
                 }
                 
                 is AIRequest.ObjectRemoval -> {
-                    LaMaInpaintingEngine(context).process(request.sourceUri, request.maskData, onProgress)
+                    com.example.ai.image.inpainting.LaMaInpaintingEngine(context).process(request.sourceUri, request.maskData, onProgress)
                 }
                 is AIRequest.Upscale -> {
-                    RealEsrganUpscaleEngine(context).process(request.sourceUri, request.scaleFactor, onProgress)
+                    com.example.ai.image.upscale.RealEsrganUpscaleEngine(context).process(request.sourceUri, request.scaleFactor, onProgress)
                 }
                 is AIRequest.Enhance -> {
                     if (request.enhanceType == "low_light") {
-                        CpgaLowLightEngine(context).process(request.sourceUri, onProgress)
+                        com.example.ai.image.enhancement.CpgaLowLightEngine(context).process(request.sourceUri, onProgress)
                     } else {
                         AIResult.Error(AIError.ModelUnavailable)
                     }
