@@ -54,7 +54,7 @@ class ModelArtifactManager(
                 license = "Apache-2.0",
                 source = "OpenCV Zoo / Hugging Face",
                 runtime = "ONNX Runtime",
-                expectedInputs = setOf("img", "mask"),
+                expectedInputs = setOf("image", "mask"),
                 expectedOutputs = setOf("output")
             ),
             ModelArtifact(
@@ -87,7 +87,9 @@ class ModelArtifactManager(
             "cpga", "cpga_fp16", "cpganet", "lowlight", "low_light" -> "cpga_fp16"
             else -> id
         }
-        return ARTIFACTS.firstOrNull { it.id.equals(normalized, ignoreCase = true) || it.id.equals(id, ignoreCase = true) }
+        return ARTIFACTS.firstOrNull {
+            it.id.equals(normalized, ignoreCase = true) || it.id.equals(id, ignoreCase = true)
+        }
     }
 
     fun localFile(artifact: ModelArtifact): File =
@@ -160,7 +162,6 @@ class ModelArtifactManager(
 
             val mutex = downloadMutexes.getOrPut(artifact.id) { Mutex() }
             mutex.withLock {
-                // Double check once inside lock
                 if (isValid(target, artifact)) {
                     updateState(
                         artifact.id,
@@ -226,7 +227,6 @@ class ModelArtifactManager(
                         }
                     }
 
-                    // Validation stage
                     updateState(
                         artifact.id,
                         ArtifactState(
@@ -239,13 +239,14 @@ class ModelArtifactManager(
 
                     coroutineContext.ensureActive()
 
-                    // Check minimum size
                     if (!partial.isFile || partial.length() < artifact.minimumBytes) {
+                        val actualSize = partial.length()
                         partial.delete()
-                        throw IllegalStateException("MODEL_INVALID: File size too small (${partial.length()} < ${artifact.minimumBytes})")
+                        throw IllegalStateException(
+                            "MODEL_INVALID: File size too small ($actualSize < ${artifact.minimumBytes})"
+                        )
                     }
 
-                    // SHA-256 check
                     if (artifact.expectedSha256 != null) {
                         val computed = sha256(partial)
                         if (!computed.equals(artifact.expectedSha256, ignoreCase = true)) {
@@ -254,9 +255,12 @@ class ModelArtifactManager(
                         }
                     }
 
-                    // Engine-specific validation
                     val structuralValid = when (artifact.runtime) {
-                        "ONNX Runtime" -> validateOnnxModel(partial, artifact.expectedInputs, artifact.expectedOutputs)
+                        "ONNX Runtime" -> validateOnnxModel(
+                            partial,
+                            artifact.expectedInputs,
+                            artifact.expectedOutputs
+                        )
                         "LiteRT/TFLite" -> validateTfliteModel(partial)
                         else -> true
                     }
@@ -266,7 +270,6 @@ class ModelArtifactManager(
                         throw IllegalStateException("MODEL_INVALID: Failed structural graph validation")
                     }
 
-                    // Success! Rename .part to target
                     if (target.exists()) target.delete()
                     if (!partial.renameTo(target)) {
                         partial.delete()
@@ -310,16 +313,22 @@ class ModelArtifactManager(
 
     fun isValid(file: File, artifact: ModelArtifact): Boolean {
         if (!file.isFile || file.length() < artifact.minimumBytes) return false
+
         if (artifact.expectedSha256 != null) {
             val hash = try {
                 runSha256Sync(file)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return false
             }
             if (!hash.equals(artifact.expectedSha256, ignoreCase = true)) return false
         }
+
         return when (artifact.runtime) {
-            "ONNX Runtime" -> validateOnnxModel(file, artifact.expectedInputs, artifact.expectedOutputs)
+            "ONNX Runtime" -> validateOnnxModel(
+                file,
+                artifact.expectedInputs,
+                artifact.expectedOutputs
+            )
             "LiteRT/TFLite" -> validateTfliteModel(file)
             else -> true
         }
@@ -360,23 +369,31 @@ class ModelArtifactManager(
         return try {
             val env = OrtEnvironment.getEnvironment()
             val opts = OrtSession.SessionOptions()
-            val session = env.createSession(modelFile.absolutePath, opts)
             try {
-                val inputs = session.inputNames
-                val outputs = session.outputNames
-                if (inputs.isEmpty() || outputs.isEmpty()) return false
-                val inputsMatch = expectedInputs.isEmpty() || expectedInputs.any { exp ->
-                    inputs.any { it.contains(exp, ignoreCase = true) }
+                val session = env.createSession(modelFile.absolutePath, opts)
+                try {
+                    val inputs = session.inputNames
+                    val outputs = session.outputNames
+                    if (inputs.isEmpty() || outputs.isEmpty()) return false
+
+                    val inputsMatch = expectedInputs.isEmpty() || expectedInputs.all { expected ->
+                        inputs.any { actual ->
+                            actual.equals(expected, ignoreCase = true)
+                        }
+                    }
+                    val outputsMatch = expectedOutputs.isEmpty() || expectedOutputs.all { expected ->
+                        outputs.any { actual ->
+                            actual.equals(expected, ignoreCase = true)
+                        }
+                    }
+                    inputsMatch && outputsMatch
+                } finally {
+                    session.close()
                 }
-                val outputsMatch = expectedOutputs.isEmpty() || expectedOutputs.any { exp ->
-                    outputs.any { it.contains(exp, ignoreCase = true) }
-                }
-                inputsMatch && outputsMatch
             } finally {
-                session.close()
                 opts.close()
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -388,13 +405,13 @@ class ModelArtifactManager(
                 val input = interpreter.getInputTensor(0)
                 val output = interpreter.getOutputTensor(0)
                 input.dataType() == DataType.FLOAT32 &&
-                output.dataType() == DataType.FLOAT32 &&
-                input.shape().contentEquals(intArrayOf(1, 3, 256, 256)) &&
-                output.shape().contentEquals(intArrayOf(1, 3, 256, 256))
+                    output.dataType() == DataType.FLOAT32 &&
+                    input.shape().contentEquals(intArrayOf(1, 3, 256, 256)) &&
+                    output.shape().contentEquals(intArrayOf(1, 3, 256, 256))
             } finally {
                 interpreter.close()
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
