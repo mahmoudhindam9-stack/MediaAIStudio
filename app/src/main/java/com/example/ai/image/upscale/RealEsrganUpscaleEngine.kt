@@ -2,11 +2,12 @@ package com.example.ai.image.upscale
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
-import android.net.Uri
-import android.provider.MediaStore
 import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
+import android.provider.MediaStore
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -14,145 +15,166 @@ import com.example.ai.core.AIError
 import com.example.ai.core.AIProgress
 import com.example.ai.core.AIResult
 import com.example.ai.core.AIProviderType
+import com.example.ai.model.ModelArtifactManager
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.FloatBuffer
+import kotlin.math.min
 
 class RealEsrganUpscaleEngine(private val context: Context) {
-    private val env = OrtEnvironment.getEnvironment()
-    private var session: OrtSession? = null
-    
-    private var inputName: String = ""
-    private var outputName: String = ""
+    companion object {
+        private const val TILE = 256
+        private const val OVERLAP = 16
+    }
 
-    fun initialize() {
+    private val env = OrtEnvironment.getEnvironment()
+    private val artifacts = ModelArtifactManager(context)
+    private var session: OrtSession? = null
+    private var inputName: String? = null
+    private var outputName: String? = null
+
+    private suspend fun initialize() {
         if (session != null) return
-        val file = File(context.filesDir, "models/RealESRGAN_x2plus.onnx")
-        if (!file.exists()) {
-            file.parentFile?.mkdirs()
-            try {
-                context.assets.open("models/RealESRGAN_x2plus.onnx").use { input ->
-                    file.outputStream().use { output -> input.copyTo(output) }
-                }
-            } catch (e: Exception) {
-                throw IllegalStateException("MODEL_NOT_FOUND: Failed to copy RealESRGAN model.")
-            }
-        }
-        
-        if (file.length() < 1024) {
-            throw IllegalStateException("MODEL_INVALID: RealESRGAN model is missing or invalid placeholder.")
-        }
-        
+        val artifact = artifacts.artifact("realesrgan_x2plus")
+            ?: error("MODEL_NOT_CONFIGURED: Real-ESRGAN artifact is missing")
+        val file = artifacts.ensureInstalled(artifact)
         try {
-            session = env.createSession(file.absolutePath)
-            inputName = session?.inputNames?.firstOrNull() ?: throw IllegalStateException("MODEL_SIGNATURE_UNSUPPORTED: No inputs")
-            outputName = session?.outputNames?.firstOrNull() ?: throw IllegalStateException("MODEL_SIGNATURE_UNSUPPORTED: No outputs")
-        } catch (e: Exception) {
+            val created = env.createSession(file.absolutePath, OrtSession.SessionOptions())
+            require(created.inputNames.isNotEmpty()) { "MODEL_SIGNATURE_UNSUPPORTED: no input" }
+            require(created.outputNames.isNotEmpty()) { "MODEL_SIGNATURE_UNSUPPORTED: no output" }
+            inputName = created.inputNames.first()
+            outputName = created.outputNames.first()
+            session = created
+        } catch (t: Throwable) {
             session?.close()
             session = null
-            throw IllegalStateException("MODEL_RUNTIME_ERROR: ${e.message}", e)
+            throw IllegalStateException("MODEL_RUNTIME_ERROR: ${t.message}", t)
         }
     }
 
     suspend fun process(sourceUri: String, scaleFactor: Int, onProgress: (AIProgress) -> Unit): AIResult {
+        if (scaleFactor != 2) return AIResult.Error(AIError.ModelUnavailable)
         return try {
-            onProgress(AIProgress(0.1f, "Initializing Real-ESRGAN..."))
+            onProgress(AIProgress(0.05f, "Initializing Real-ESRGAN"))
             initialize()
-            val sess = session ?: return AIResult.Error(AIError.Unknown("RealESRGAN not initialized"))
-            
-            onProgress(AIProgress(0.3f, "Loading Image..."))
-            val sourceBitmap = getBitmap(Uri.parse(sourceUri))
-            val w = sourceBitmap.width
-            val h = sourceBitmap.height
-            
-            if (w * h > 1024 * 1024) {
-                return AIResult.Error(AIError.Unknown("Insufficient memory for on-device upscale."))
-            }
-            
-            onProgress(AIProgress(0.5f, "Upscaling Image (x2)..."))
-            val imgData = bitmapToFloatBuffer(sourceBitmap)
-            val imgTensor = OnnxTensor.createTensor(env, imgData, longArrayOf(1, 3, h.toLong(), w.toLong()))
-            
-            val inputs = mapOf(inputName to imgTensor)
-            val results = sess.run(inputs)
-            val outputTensor = results.get(outputName) as? OnnxTensor
-                ?: return AIResult.Error(AIError.Unknown("MODEL_RUNTIME_ERROR: Null output tensor"))
-            
-            onProgress(AIProgress(0.8f, "Rendering Results..."))
-            val outBuffer = outputTensor.floatBuffer
-            val outW = w * 2
-            val outH = h * 2
-            
-            val outBitmap = floatBufferToBitmap(outBuffer, outW, outH)
-            
-            imgTensor.close()
-            results.close()
-            
-            val cacheFileName = "ai_esrgan_out_${System.currentTimeMillis()}.png"
-            val cacheFile = File(context.cacheDir, cacheFileName)
-            FileOutputStream(cacheFile).use { out ->
-                outBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-            
-            onProgress(AIProgress(1.0f, "Complete"))
-            AIResult.Success(
-                outputUri = Uri.fromFile(cacheFile).toString(),
-                processingType = "Upscale",
-                providerUsed = AIProviderType.ON_DEVICE
-            )
-            
-        } catch (e: Exception) {
-            AIResult.Error(AIError.Unknown(e.message ?: "Unknown MODEL_RUNTIME_ERROR"))
-        }
-    }
-    
-    private fun getBitmap(uri: Uri): Bitmap {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
-                decoder.isMutableRequired = true
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-        }
-    }
-    
-    private fun bitmapToFloatBuffer(bitmap: Bitmap): FloatBuffer {
-        val w = bitmap.width
-        val h = bitmap.height
-        val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        val buffer = FloatBuffer.allocate(1 * 3 * h * w)
-        for (c in 0..2) {
-            for (i in pixels.indices) {
-                val color = pixels[i]
-                val v = when(c) {
-                    0 -> Color.red(color)
-                    1 -> Color.green(color)
-                    else -> Color.blue(color)
+            val sess = session ?: return AIResult.Error(AIError.ModelUnavailable)
+            val source = loadBitmap(Uri.parse(sourceUri)) ?: return AIResult.Error(AIError.InvalidInput)
+            val output = Bitmap.createBitmap(source.width * 2, source.height * 2, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+
+            val step = TILE - OVERLAP
+            var tileIndex = 0
+            val tileCountX = ((source.width - 1) / step) + 1
+            val tileCountY = ((source.height - 1) / step) + 1
+            val totalTiles = tileCountX * tileCountY
+
+            var top = 0
+            while (top < source.height) {
+                val bottom = min(top + TILE, source.height)
+                val tileHeight = bottom - top
+                var left = 0
+                while (left < source.width) {
+                    val right = min(left + TILE, source.width)
+                    val tileWidth = right - left
+                    val tile = Bitmap.createBitmap(source, left, top, tileWidth, tileHeight)
+                    try {
+                        val values = bitmapToNchw(tile)
+                        val input = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.wrap(values),
+                            longArrayOf(1, 3, tileHeight.toLong(), tileWidth.toLong())
+                        )
+                        try {
+                            val results = sess.run(mapOf(requireNotNull(inputName) to input))
+                            try {
+                                val raw = results.get(requireNotNull(outputName)).value
+                                val outputValues = extractFloatArray(raw)
+                                    ?: return AIResult.Error(AIError.ProcessingFailure)
+                                val expected = tileWidth * tileHeight * 4 * 3
+                                if (outputValues.size < expected) {
+                                    return AIResult.Error(AIError.ProcessingFailure)
+                                }
+                                val outTile = tensorToBitmap(outputValues, tileWidth * 2, tileHeight * 2)
+                                canvas.drawBitmap(outTile, left * 2f, top * 2f, null)
+                                outTile.recycle()
+                            } finally {
+                                results.close()
+                            }
+                        } finally {
+                            input.close()
+                        }
+                    } finally {
+                        tile.recycle()
+                    }
+                    tileIndex++
+                    onProgress(AIProgress(0.15f + 0.75f * tileIndex / totalTiles.toFloat(), "Upscaling ${tileIndex}/${totalTiles}"))
+                    left += if (right == source.width) tileWidth else step
                 }
-                buffer.put((v / 255f))
+                top += if (bottom == source.height) tileHeight else step
+            }
+            source.recycle()
+
+            val file = File(context.cacheDir, "ai_esrgan_${System.currentTimeMillis()}.png")
+            FileOutputStream(file).use { out ->
+                check(output.compress(Bitmap.CompressFormat.PNG, 100, out)) { "Failed to encode Real-ESRGAN result" }
+            }
+            output.recycle()
+            onProgress(AIProgress(1f, "Complete"))
+            AIResult.Success(Uri.fromFile(file).toString(), "Upscale", AIProviderType.ON_DEVICE)
+        } catch (t: Throwable) {
+            AIResult.Error(AIError.Unknown(t.message ?: "Real-ESRGAN inference failed"))
+        }
+    }
+
+    private fun bitmapToNchw(bitmap: Bitmap): FloatArray {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        val plane = pixels.size
+        return FloatArray(plane * 3).also { out ->
+            for (i in pixels.indices) {
+                val c = pixels[i]
+                out[i] = Color.red(c) / 255f
+                out[plane + i] = Color.green(c) / 255f
+                out[2 * plane + i] = Color.blue(c) / 255f
             }
         }
-        buffer.rewind()
-        return buffer
     }
-    
-    private fun floatBufferToBitmap(buffer: FloatBuffer, w: Int, h: Int): Bitmap {
-        val pixels = IntArray(w * h)
-        val channelSize = w * h
-        buffer.rewind()
-        for (i in 0 until channelSize) {
-            val r = (buffer.get(i) * 255f).coerceIn(0f, 255f).toInt()
-            val g = (buffer.get(i + channelSize) * 255f).coerceIn(0f, 255f).toInt()
-            val b = (buffer.get(i + 2 * channelSize) * 255f).coerceIn(0f, 255f).toInt()
+
+    private fun tensorToBitmap(values: FloatArray, width: Int, height: Int): Bitmap {
+        val pixels = IntArray(width * height)
+        val plane = width * height
+        for (i in pixels.indices) {
+            val r = (values[i] * 255f).coerceIn(0f, 255f).toInt()
+            val g = (values[plane + i] * 255f).coerceIn(0f, 255f).toInt()
+            val b = (values[2 * plane + i] * 255f).coerceIn(0f, 255f).toInt()
             pixels[i] = Color.rgb(r, g, b)
         }
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
-        return bitmap
+        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+            it.setPixels(pixels, 0, width, 0, 0, width, height)
+        }
     }
-    
+
+    private fun extractFloatArray(value: Any?): FloatArray? = when (value) {
+        is FloatArray -> value
+        is Array<*> -> value.flatMap { extractFloatValues(it) }.toFloatArray()
+        else -> null
+    }
+
+    private fun extractFloatValues(value: Any?): List<Float> = when (value) {
+        is FloatArray -> value.toList()
+        is Array<*> -> value.flatMap { extractFloatValues(it) }
+        else -> emptyList()
+    }
+
+    private fun loadBitmap(uri: Uri): Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
+            decoder.isMutableRequired = false
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+    }
+
     fun release() {
         session?.close()
         session = null

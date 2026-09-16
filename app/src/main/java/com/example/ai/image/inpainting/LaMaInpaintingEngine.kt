@@ -2,11 +2,14 @@ package com.example.ai.image.inpainting
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.net.Uri
-import android.provider.MediaStore
-import android.graphics.ImageDecoder
 import android.os.Build
+import android.graphics.ImageDecoder
+import android.provider.MediaStore
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -19,178 +22,209 @@ import java.io.FileOutputStream
 import java.nio.FloatBuffer
 
 class LaMaInpaintingEngine(private val context: Context) {
+    companion object {
+        private const val MODEL_WIDTH = 512
+        private const val MODEL_HEIGHT = 512
+    }
+
     private val env = OrtEnvironment.getEnvironment()
     private var session: OrtSession? = null
-    
-    private var imageInputName: String = ""
-    private var maskInputName: String = ""
-    private var outputName: String = ""
+    private var imageInputName: String? = null
+    private var maskInputName: String? = null
+    private var outputName: String? = null
 
-    fun initialize() {
+    suspend fun initialize() {
         if (session != null) return
-        val loader = LaMaModelLoader(context)
-        val file = loader.getModelFile()
-        
-        if (!file.exists() || file.length() < 1024) {
-            throw IllegalStateException("MODEL_INVALID: LaMa model is missing or invalid placeholder.")
+        val file = LaMaModelLoader(context).getModelFile()
+        if (!file.isFile || file.length() < 80L * 1024L * 1024L) {
+            throw IllegalStateException("MODEL_INVALID: LaMa binary is missing or incomplete")
         }
-        
+
         try {
-            session = env.createSession(file.absolutePath)
-            val inputNames = session?.inputNames?.toList() ?: emptyList()
-            if (inputNames.size < 2) {
-                throw IllegalStateException("MODEL_SIGNATURE_UNSUPPORTED: Expected at least 2 inputs (image, mask).")
-            }
-            imageInputName = inputNames.firstOrNull { it.contains("image", true) } ?: inputNames[0]
-            maskInputName = inputNames.firstOrNull { it.contains("mask", true) } ?: inputNames[1]
-            outputName = session?.outputNames?.firstOrNull() ?: throw IllegalStateException("MODEL_SIGNATURE_UNSUPPORTED: No output found.")
-        } catch (e: Exception) {
+            val created = env.createSession(file.absolutePath, OrtSession.SessionOptions())
+            val inputs = created.inputNames.toList()
+            val outputs = created.outputNames.toList()
+            require(inputs.size >= 2) { "MODEL_SIGNATURE_UNSUPPORTED: LaMa needs image and mask inputs" }
+            require(outputs.isNotEmpty()) { "MODEL_SIGNATURE_UNSUPPORTED: LaMa has no outputs" }
+
+            imageInputName = inputs.firstOrNull { it.equals("image", ignoreCase = true) } ?: inputs[0]
+            maskInputName = inputs.firstOrNull { it.equals("mask", ignoreCase = true) } ?: inputs[1]
+            outputName = outputs[0]
+            session = created
+        } catch (t: Throwable) {
             session?.close()
             session = null
-            throw IllegalStateException("MODEL_RUNTIME_ERROR: ${e.message}", e)
+            throw IllegalStateException("MODEL_RUNTIME_ERROR: ${t.message}", t)
         }
     }
 
-    suspend fun process(sourceUri: String, maskData: String, onProgress: (AIProgress) -> Unit): AIResult {
+    suspend fun process(
+        sourceUri: String,
+        maskData: String,
+        onProgress: (AIProgress) -> Unit
+    ): AIResult {
         return try {
-            onProgress(AIProgress(0.1f, "Initializing LaMa..."))
+            onProgress(AIProgress(0.05f, "Initializing LaMa"))
             initialize()
-            val sess = session ?: return AIResult.Error(AIError.Unknown("LaMa session not initialized"))
-            
-            onProgress(AIProgress(0.2f, "Loading Image..."))
-            val sourceBitmap = getBitmap(Uri.parse(sourceUri))
-            
-            onProgress(AIProgress(0.3f, "Preprocessing Tensors..."))
-            val targetSize = 512
-            val scale = Math.min(targetSize.toFloat() / sourceBitmap.width, targetSize.toFloat() / sourceBitmap.height)
-            var w = (sourceBitmap.width * scale).toInt()
-            var h = (sourceBitmap.height * scale).toInt()
-            w = (w / 8) * 8
-            h = (h / 8) * 8
-            
-            val scaledSource = Bitmap.createScaledBitmap(sourceBitmap, w, h, true)
-            val maskBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            val maskCanvas = android.graphics.Canvas(maskBitmap)
-            maskCanvas.drawColor(Color.BLACK)
-            
-            // Basic mask parsing from string (e.g., "[left,top,right,bottom]")
-            val paint = android.graphics.Paint().apply { color = Color.WHITE; style = android.graphics.Paint.Style.FILL }
-            if (maskData.isNotBlank() && maskData.startsWith("[")) {
-                try {
-                    val parts = maskData.removeSurrounding("[", "]").split(",")
-                    if (parts.size == 4) {
-                        val rect = android.graphics.Rect(
-                            (parts[0].toFloat() * w).toInt(), (parts[1].toFloat() * h).toInt(),
-                            (parts[2].toFloat() * w).toInt(), (parts[3].toFloat() * h).toInt()
-                        )
-                        maskCanvas.drawRect(rect, paint)
-                    }
-                } catch (e: Exception) {
-                    // fall back to empty mask
-                }
-            }
-            
-            val imgData = bitmapToFloatBuffer(scaledSource)
-            val maskDataBuf = maskToFloatBuffer(maskBitmap)
-            
-            val imgTensor = OnnxTensor.createTensor(env, imgData, longArrayOf(1, 3, h.toLong(), w.toLong()))
-            val maskTensor = OnnxTensor.createTensor(env, maskDataBuf, longArrayOf(1, 1, h.toLong(), w.toLong()))
-            
-            val inputs = mapOf(imageInputName to imgTensor, maskInputName to maskTensor)
-            
-            onProgress(AIProgress(0.5f, "Inpainting..."))
-            val results = sess.run(inputs)
-            val outputTensor = results.get(outputName) as? OnnxTensor
-                ?: return AIResult.Error(AIError.Unknown("MODEL_RUNTIME_ERROR: Null output tensor"))
-            
-            onProgress(AIProgress(0.8f, "Postprocessing..."))
-            val outBuffer = outputTensor.floatBuffer
-            val outBitmap = floatBufferToBitmap(outBuffer, w, h)
-            
-            imgTensor.close()
-            maskTensor.close()
-            results.close()
-            
-            val finalBitmap = Bitmap.createScaledBitmap(outBitmap, sourceBitmap.width, sourceBitmap.height, true)
-            
-            val cacheFileName = "ai_lama_out_${System.currentTimeMillis()}.png"
-            val cacheFile = File(context.cacheDir, cacheFileName)
-            FileOutputStream(cacheFile).use { out ->
-                finalBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-            
-            onProgress(AIProgress(1.0f, "Complete"))
-            AIResult.Success(
-                outputUri = Uri.fromFile(cacheFile).toString(),
-                processingType = "ObjectRemoval",
-                providerUsed = AIProviderType.ON_DEVICE
+            val sess = session ?: return AIResult.Error(AIError.ModelUnavailable)
+
+            onProgress(AIProgress(0.15f, "Loading image"))
+            val source = loadBitmap(Uri.parse(sourceUri))
+                ?: return AIResult.Error(AIError.InvalidInput)
+
+            val imageInput = prepareImage(source)
+            val maskInput = prepareMask(maskData)
+            val imageTensor = OnnxTensor.createTensor(
+                env,
+                FloatBuffer.wrap(imageInput),
+                longArrayOf(1, 3, MODEL_HEIGHT.toLong(), MODEL_WIDTH.toLong())
             )
-            
-        } catch (e: Exception) {
-            AIResult.Error(AIError.Unknown("MODEL_RUNTIME_ERROR: ${e.message}"))
-        }
-    }
-    
-    private fun getBitmap(uri: Uri): Bitmap {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
-                decoder.isMutableRequired = true
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-        }
-    }
-    
-    private fun bitmapToFloatBuffer(bitmap: Bitmap): FloatBuffer {
-        val w = bitmap.width
-        val h = bitmap.height
-        val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        val buffer = FloatBuffer.allocate(1 * 3 * h * w)
-        for (c in 0..2) {
-            for (i in pixels.indices) {
-                val color = pixels[i]
-                val v = when(c) {
-                    0 -> Color.red(color)
-                    1 -> Color.green(color)
-                    else -> Color.blue(color)
+            val maskTensor = OnnxTensor.createTensor(
+                env,
+                FloatBuffer.wrap(maskInput),
+                longArrayOf(1, 1, MODEL_HEIGHT.toLong(), MODEL_WIDTH.toLong())
+            )
+
+            try {
+                onProgress(AIProgress(0.45f, "Running inpainting"))
+                val results = sess.run(
+                    mapOf(
+                        requireNotNull(imageInputName) to imageTensor,
+                        requireNotNull(maskInputName) to maskTensor
+                    )
+                )
+                try {
+                    val value = results.get(requireNotNull(outputName)).value
+                    val output = extractFloatArray(value)
+                        ?: return AIResult.Error(AIError.ProcessingFailure)
+                    if (output.size < MODEL_WIDTH * MODEL_HEIGHT * 3) {
+                        return AIResult.Error(AIError.ProcessingFailure)
+                    }
+
+                    onProgress(AIProgress(0.75f, "Rendering result"))
+                    val result = outputToBitmap(output, MODEL_WIDTH, MODEL_HEIGHT)
+                    val restored = Bitmap.createScaledBitmap(result, source.width, source.height, true)
+                    val outputFile = writeResult(restored)
+
+                    onProgress(AIProgress(1f, "Complete"))
+                    AIResult.Success(
+                        outputUri = Uri.fromFile(outputFile).toString(),
+                        processingType = "ObjectRemoval",
+                        providerUsed = AIProviderType.ON_DEVICE
+                    )
+                } finally {
+                    results.close()
                 }
-                buffer.put((v / 255f))
+            } finally {
+                imageTensor.close()
+                maskTensor.close()
+            }
+        } catch (t: Throwable) {
+            AIResult.Error(AIError.Unknown(t.message ?: "LaMa inference failed"))
+        }
+    }
+
+    private fun prepareImage(source: Bitmap): FloatArray {
+        val scaled = Bitmap.createScaledBitmap(source, MODEL_WIDTH, MODEL_HEIGHT, true)
+        val pixels = IntArray(MODEL_WIDTH * MODEL_HEIGHT)
+        scaled.getPixels(pixels, 0, MODEL_WIDTH, 0, 0, MODEL_WIDTH, MODEL_HEIGHT)
+        scaled.recycle()
+        val out = FloatArray(pixels.size * 3)
+        val plane = pixels.size
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            out[i] = Color.red(c) / 255f
+            out[plane + i] = Color.green(c) / 255f
+            out[2 * plane + i] = Color.blue(c) / 255f
+        }
+        return out
+    }
+
+    private fun prepareMask(maskData: String): FloatArray {
+        val mask = Bitmap.createBitmap(MODEL_WIDTH, MODEL_HEIGHT, Bitmap.Config.ALPHA_8)
+        Canvas(mask).apply {
+            drawColor(Color.BLACK)
+            if (maskData.isNotBlank() && maskData.startsWith("[")) {
+                val parts = maskData.removeSurrounding("[", "]").split(',')
+                if (parts.size == 4) {
+                    val left = parts[0].toFloatOrNull() ?: 0f
+                    val top = parts[1].toFloatOrNull() ?: 0f
+                    val right = parts[2].toFloatOrNull() ?: 1f
+                    val bottom = parts[3].toFloatOrNull() ?: 1f
+                    val paint = Paint().apply {
+                        color = Color.WHITE
+                        style = Paint.Style.FILL
+                    }
+                    drawRect(
+                        RectF(
+                            left.coerceIn(0f, 1f) * MODEL_WIDTH,
+                            top.coerceIn(0f, 1f) * MODEL_HEIGHT,
+                            right.coerceIn(0f, 1f) * MODEL_WIDTH,
+                            bottom.coerceIn(0f, 1f) * MODEL_HEIGHT
+                        ),
+                        paint
+                    )
+                }
             }
         }
-        buffer.rewind()
-        return buffer
+        val pixels = ByteArray(MODEL_WIDTH * MODEL_HEIGHT)
+        val alpha = ByteArray(pixels.size)
+        mask.copyPixelsToBuffer(java.nio.ByteBuffer.wrap(alpha))
+        mask.recycle()
+        val out = FloatArray(alpha.size)
+        for (i in alpha.indices) out[i] = (alpha[i].toInt() and 0xFF) / 255f
+        return out
     }
-    
-    private fun maskToFloatBuffer(bitmap: Bitmap): FloatBuffer {
-        val w = bitmap.width
-        val h = bitmap.height
-        val pixels = IntArray(w * h)
-        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-        val buffer = FloatBuffer.allocate(1 * 1 * h * w)
-        for (color in pixels) {
-            buffer.put(Color.red(color) / 255f)
-        }
-        buffer.rewind()
-        return buffer
-    }
-    
-    private fun floatBufferToBitmap(buffer: FloatBuffer, w: Int, h: Int): Bitmap {
-        val pixels = IntArray(w * h)
-        val channelSize = w * h
-        buffer.rewind()
-        for (i in 0 until channelSize) {
-            val r = (buffer.get(i) * 255f).coerceIn(0f, 255f).toInt()
-            val g = (buffer.get(i + channelSize) * 255f).coerceIn(0f, 255f).toInt()
-            val b = (buffer.get(i + 2 * channelSize) * 255f).coerceIn(0f, 255f).toInt()
+
+    private fun outputToBitmap(values: FloatArray, width: Int, height: Int): Bitmap {
+        val pixels = IntArray(width * height)
+        val plane = width * height
+        for (i in pixels.indices) {
+            // OpenCV's reference implementation converts the model output directly to uint8.
+            // Accept either [0,1] or [0,255] output without allowing invalid values through.
+            val scale = if (values.maxOrNull()?.let { it <= 1.5f } == true) 255f else 1f
+            val r = (values[i] * scale).coerceIn(0f, 255f).toInt()
+            val g = (values[plane + i] * scale).coerceIn(0f, 255f).toInt()
+            val b = (values[2 * plane + i] * scale).coerceIn(0f, 255f).toInt()
             pixels[i] = Color.rgb(r, g, b)
         }
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
-        return bitmap
+        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+            it.setPixels(pixels, 0, width, 0, 0, width, height)
+        }
     }
-    
+
+    private fun extractFloatArray(value: Any?): FloatArray? {
+        return when (value) {
+            is FloatArray -> value
+            is Array<*> -> value.flatMap { extractFloatValues(it).asIterable() }.toFloatArray()
+            else -> null
+        }
+    }
+
+    private fun extractFloatValues(value: Any?): List<Float> = when (value) {
+        is FloatArray -> value.toList()
+        is Array<*> -> value.flatMap { extractFloatValues(it) }
+        else -> emptyList()
+    }
+
+    private fun loadBitmap(uri: Uri): Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
+            decoder.isMutableRequired = false
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+    }
+
+    private fun writeResult(bitmap: Bitmap): File {
+        val file = File(context.cacheDir, "ai_lama_${System.currentTimeMillis()}.png")
+        FileOutputStream(file).use { output ->
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "Failed to encode LaMa result" }
+        }
+        bitmap.recycle()
+        return file
+    }
+
     fun release() {
         session?.close()
         session = null
