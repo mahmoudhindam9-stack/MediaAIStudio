@@ -25,11 +25,31 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Compile Kotlin and capture diagnostics
+        shell: bash
+        run: |
+          set +e
+          ./gradlew :app:compileDebugKotlin --stacktrace 2>&1 | tee compile.log
+          status=${PIPESTATUS[0]}
+          echo "GRADLE_EXIT_CODE=$status" >> compile.log
+          exit "$status"
+
+      - name: Upload Kotlin compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-compile-diagnostics
+          path: compile.log
+          if-no-files-found: error
+
       - name: Lint debug
-        run: gradle lintDebug --stacktrace
+        run: ./gradlew lintDebug --stacktrace
 
       - name: Assemble debug
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
