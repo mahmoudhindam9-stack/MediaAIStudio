@@ -1,0 +1,17 @@
+{
+  "name": "aistudio-backend",
+  "version": "1.0.0",
+  "description": "Proxy backend for AI Generative Tools",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "dotenv": "^16.4.5",
+    "cors": "^2.8.5",
+    "uuid": "^10.0.0"
+  }
+}

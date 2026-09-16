@@ -1,0 +1,6 @@
+{
+  "name": "MediaAIStudio",
+  "description": "An all-in-one professional platform for camera, media editing, and AI transformations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
