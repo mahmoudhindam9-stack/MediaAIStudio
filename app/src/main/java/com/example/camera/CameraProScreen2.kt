@@ -17,7 +17,6 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
-import androidx.camera.core.SessionConfig
 import androidx.camera.core.DynamicRange
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
@@ -206,7 +205,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         }
     }
 
-    LaunchedEffect(provider, lensFacing, mode, slowMotionFps, bokehAvailable, nightAvailable, hdrAvailable) {
+    LaunchedEffect(provider, lensFacing, mode, slowMotionFps) {
         val p = provider ?: return@LaunchedEffect
         try {
             val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
@@ -259,7 +258,13 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                     val vc = VideoCapture.withOutput(rec)
                     recorder = rec
                     videoCapture = vc
-                    camera = p.bindToLifecycle(lifecycleOwner, selector, preview, vc)
+                    analysis.setAnalyzer(cameraExecutor, faceAnalyzer)
+                    camera = try {
+                        p.bindToLifecycle(lifecycleOwner, selector, preview, vc, analysis)
+                    } catch (_: Exception) {
+                        analysis.clearAnalyzer()
+                        p.bindToLifecycle(lifecycleOwner, selector, preview, vc)
+                    }
                 }
                 else -> {
                     val cap = ImageCapture.Builder()
@@ -281,10 +286,15 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                         extensionsManager?.getExtensionEnabledCameraSelector(selector, extensionMode) ?: selector
                     } else selector
 
-                    val useAnalysis = extensionMode == androidx.camera.extensions.ExtensionMode.NONE && mode != CameraMode.SLOW_MO
+                    val useAnalysis = extensionMode == androidx.camera.extensions.ExtensionMode.NONE
                     if (useAnalysis) {
                         analysis.setAnalyzer(cameraExecutor, faceAnalyzer)
-                        camera = p.bindToLifecycle(lifecycleOwner, extSelector, preview, cap, analysis)
+                        camera = try {
+                            p.bindToLifecycle(lifecycleOwner, extSelector, preview, cap, analysis)
+                        } catch (_: Exception) {
+                            analysis.clearAnalyzer()
+                            p.bindToLifecycle(lifecycleOwner, extSelector, preview, cap)
+                        }
                     } else {
                         camera = p.bindToLifecycle(lifecycleOwner, extSelector, preview, cap)
                     }
@@ -298,6 +308,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                     }
                 }
             }
+
             camera?.let { bound ->
                 bound.cameraInfo.zoomState.value?.let { z ->
                     zoomRatio = z.zoomRatio
@@ -345,24 +356,30 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(
             Modifier.fillMaxSize()
-                .pointerInput(camera) { detectTapGestures { point ->
-                    focusPoint = point
-                    camera?.cameraControl?.startFocusAndMetering(
-                        FocusMeteringAction.Builder(previewView.meteringPointFactory.createPoint(point.x, point.y))
-                            .setAutoCancelDuration(3, TimeUnit.SECONDS).build()
-                    )
-                } }
-                .pointerInput(camera) { detectTransformGestures { _, _, gestureZoom, _ ->
-                    val bound = camera ?: return@detectTransformGestures
-                    val z = bound.cameraInfo.zoomState.value ?: return@detectTransformGestures
-                    val next = (z.zoomRatio * gestureZoom).coerceIn(z.minZoomRatio, z.maxZoomRatio)
-                    bound.cameraControl.setZoomRatio(next)
-                    zoomRatio = next
-                } }
+                .pointerInput(camera) {
+                    detectTapGestures { point ->
+                        focusPoint = point
+                        camera?.cameraControl?.startFocusAndMetering(
+                            FocusMeteringAction.Builder(previewView.meteringPointFactory.createPoint(point.x, point.y))
+                                .setAutoCancelDuration(3, TimeUnit.SECONDS).build()
+                        )
+                    }
+                }
+                .pointerInput(camera) {
+                    detectTransformGestures { _, _, gestureZoom, _ ->
+                        val bound = camera ?: return@detectTransformGestures
+                        val z = bound.cameraInfo.zoomState.value ?: return@detectTransformGestures
+                        val next = (z.zoomRatio * gestureZoom).coerceIn(z.minZoomRatio, z.maxZoomRatio)
+                        bound.cameraControl.setZoomRatio(next)
+                        zoomRatio = next
+                    }
+                }
         ) {
             AndroidView({ previewView }, Modifier.fillMaxSize())
             if (gridEnabled) GridOverlay(Modifier.fillMaxSize())
-            focusPoint?.let { p -> Box(Modifier.offset { IntOffset(p.x.toInt() - 24, p.y.toInt() - 24) }.size(48.dp).border(2.dp, Color.Yellow, CircleShape)) }
+            focusPoint?.let { p ->
+                Box(Modifier.offset { IntOffset(p.x.toInt() - 24, p.y.toInt() - 24) }.size(48.dp).border(2.dp, Color.Yellow, CircleShape))
+            }
             if (faceTarget != null && faceFocusEnabled && mode != CameraMode.SLOW_MO) {
                 Box(Modifier.align(Alignment.Center).size(82.dp).border(2.dp, Color.Cyan, RoundedCornerShape(24.dp)))
             }
@@ -397,7 +414,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                     tint = if (torchOn || flashMode != ImageCapture.FLASH_MODE_OFF) Color.Yellow else Color.White
                 )
             }
-            Text("${String.format(Locale.US, "%.1f", zoomRatio)}x", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(if (mode == CameraMode.SLOW_MO) "${slowMotionFps}fps" else "${String.format(Locale.US, "%.1f", zoomRatio)}x", color = Color.White, fontWeight = FontWeight.Bold)
             IconButton(onClick = { faceFocusEnabled = !faceFocusEnabled }) {
                 Text("FACE", color = if (faceFocusEnabled) Color.Cyan else Color.White.copy(alpha = 0.45f), fontWeight = FontWeight.Bold)
             }
@@ -414,29 +431,19 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
 
         Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 132.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             CameraMode.values().forEach { m ->
-                val available = when (m) {
-                    CameraMode.HDR -> hdrAvailable
-                    CameraMode.SLOW_MO -> supportedSlowFps.isNotEmpty() || mode == CameraMode.SLOW_MO
-                    else -> true
-                }
-                if (available) {
-                    TextButton(onClick = { if (!isRecording) mode = m }) {
-                        Text(m.label, color = if (mode == m) Color.Yellow else Color.White.copy(alpha = 0.65f), fontWeight = if (mode == m) FontWeight.Bold else FontWeight.Normal)
-                    }
+                val available = m != CameraMode.HDR || hdrAvailable
+                if (available) TextButton(onClick = { if (!isRecording) mode = m }) {
+                    Text(m.label, color = if (mode == m) Color.Yellow else Color.White.copy(alpha = 0.65f), fontWeight = if (mode == m) FontWeight.Bold else FontWeight.Normal)
                 }
             }
         }
 
         if (showTools) {
-            Surface(Modifier.fillMaxWidth().padding(12.dp).align(Alignment.BottomCenter).padding(bottom = 190.dp), color = Color.Black.copy(alpha = 0.84f), shape = RoundedCornerShape(18.dp)) {
+            Surface(Modifier.fillMaxWidth().padding(12.dp).align(Alignment.BottomCenter).padding(bottom = 188.dp), color = Color.Black.copy(alpha = 0.84f), shape = RoundedCornerShape(18.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Timer", color = Color.White, modifier = Modifier.weight(1f))
-                        listOf(0, 3, 5, 10).forEach { value ->
-                            TextButton(onClick = { timerSeconds = value }) {
-                                Text(if (value == 0) "OFF" else "${value}s", color = if (timerSeconds == value) Color.Yellow else Color.White)
-                            }
-                        }
+                        listOf(0, 3, 5, 10).forEach { value -> TextButton(onClick = { timerSeconds = value }) { Text(if (value == 0) "OFF" else "${value}s", color = if (timerSeconds == value) Color.Yellow else Color.White) } }
                     }
                     if (mode == CameraMode.PORTRAIT && !bokehAvailable) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,7 +461,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                             TextButton(onClick = { exposureIndex = (exposureIndex + 1).coerceIn(r.lower, r.upper); camera?.cameraControl?.setExposureCompensationIndex(exposureIndex) }) { Text("+", color = Color.White) }
                         }
                     }
-                    if (mode == CameraMode.SLOW_MO) {
+                    if (mode == CameraMode.SLOW_MO && supportedSlowFps.isNotEmpty()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Slow Motion", color = Color.White, modifier = Modifier.weight(1f))
                             supportedSlowFps.forEach { fps -> TextButton(onClick = { slowMotionFps = fps }) { Text("${fps}fps", color = if (slowMotionFps == fps) Color.Yellow else Color.White) } }
@@ -536,7 +543,7 @@ private suspend fun capturePhotoNow(
     }
     val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
     c.takePicture(options, ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageSavedCallback {
-        override fun onError(exception: ImageCaptureException) { }
+        override fun onError(exception: ImageCaptureException) { android.util.Log.e("CameraPro", "Photo capture failed", exception) }
         override fun onImageSaved(result: ImageCapture.OutputFileResults) {
             val uri = result.savedUri ?: return
             scope.launch(Dispatchers.Default) {
