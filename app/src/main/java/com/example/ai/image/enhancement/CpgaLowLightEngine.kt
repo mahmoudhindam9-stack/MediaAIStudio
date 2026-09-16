@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.Paint
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -27,6 +26,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.coroutines.coroutineContext
+import kotlin.math.roundToInt
 
 class CpgaLowLightEngine(context: Context) {
     companion object {
@@ -76,6 +76,7 @@ class CpgaLowLightEngine(context: Context) {
             var fittedInput: Bitmap? = null
             var enhancedTile: Bitmap? = null
             var enhancedRegion: Bitmap? = null
+            var enhancedOriginal: Bitmap? = null
             try {
                 coroutineContext.ensureActive()
                 onProgress(AIProgress(0.05f, "Initializing CPGA"))
@@ -90,8 +91,7 @@ class CpgaLowLightEngine(context: Context) {
                 val originalWidth = source.width
                 val originalHeight = source.height
 
-                // Fit the whole image inside the fixed 256x256 model canvas without cropping.
-                // The model still receives a square tensor, while all original image content is preserved.
+                // Fit the whole image into the fixed square model canvas without cropping any content.
                 val scale = minOf(
                     MODEL_SIZE.toFloat() / originalWidth.toFloat(),
                     MODEL_SIZE.toFloat() / originalHeight.toFloat()
@@ -105,7 +105,12 @@ class CpgaLowLightEngine(context: Context) {
                 fittedInput = Bitmap.createBitmap(MODEL_SIZE, MODEL_SIZE, Bitmap.Config.ARGB_8888)
                 Canvas(fittedInput!!).apply {
                     drawColor(Color.BLACK)
-                    drawBitmap(resized, offsetX.toFloat(), offsetY.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG))
+                    drawBitmap(
+                        resized,
+                        offsetX.toFloat(),
+                        offsetY.toFloat(),
+                        Paint(Paint.FILTER_BITMAP_FLAG)
+                    )
                 }
                 if (resized !== source) resized.recycle()
 
@@ -126,7 +131,6 @@ class CpgaLowLightEngine(context: Context) {
                 onProgress(AIProgress(0.8f, "Reconstructing result"))
                 enhancedTile = outputToBitmap(output)
 
-                // Extract only the enhanced region that corresponds to the original image.
                 enhancedRegion = Bitmap.createBitmap(
                     enhancedTile!!,
                     offsetX,
@@ -137,9 +141,7 @@ class CpgaLowLightEngine(context: Context) {
                 enhancedTile?.recycle()
                 enhancedTile = null
 
-                // Resize the enhanced region back to the ORIGINAL dimensions and replace only
-                // the image area. No original pixels are cropped away.
-                val enhancedOriginal = Bitmap.createScaledBitmap(
+                enhancedOriginal = Bitmap.createScaledBitmap(
                     enhancedRegion!!,
                     originalWidth,
                     originalHeight,
@@ -148,22 +150,21 @@ class CpgaLowLightEngine(context: Context) {
                 enhancedRegion?.recycle()
                 enhancedRegion = null
 
-                val resultBitmap = enhancedOriginal
-
                 source?.recycle()
                 source = null
 
                 val file = File(appContext.cacheDir, "ai_cpga_${System.currentTimeMillis()}.png")
                 FileOutputStream(file).use { stream ->
                     check(
-                        resultBitmap.compress(
+                        enhancedOriginal!!.compress(
                             Bitmap.CompressFormat.PNG,
                             100,
                             stream
                         )
                     ) { "Failed to encode CPGA result" }
                 }
-                resultBitmap.recycle()
+                enhancedOriginal?.recycle()
+                enhancedOriginal = null
 
                 val contentUri = FileProvider.getUriForFile(
                     appContext,
@@ -181,6 +182,7 @@ class CpgaLowLightEngine(context: Context) {
                 fittedInput?.recycle()
                 enhancedTile?.recycle()
                 enhancedRegion?.recycle()
+                enhancedOriginal?.recycle()
                 source?.recycle()
             }
         }
