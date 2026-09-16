@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -68,79 +70,120 @@ class CpgaLowLightEngine(context: Context) {
         }
     }
 
-    suspend fun process(sourceUri: String, onProgress: (AIProgress) -> Unit): AIResult = withContext(Dispatchers.Default) {
-        try {
-            coroutineContext.ensureActive()
-            onProgress(AIProgress(0.05f, "Initializing CPGA"))
-            initialize()
-            val tflite = interpreter ?: return@withContext AIResult.Error(AIError.ModelUnavailable)
+    suspend fun process(sourceUri: String, onProgress: (AIProgress) -> Unit): AIResult =
+        withContext(Dispatchers.Default) {
+            var source: Bitmap? = null
+            var fittedInput: Bitmap? = null
+            var enhancedTile: Bitmap? = null
+            var enhancedRegion: Bitmap? = null
+            try {
+                coroutineContext.ensureActive()
+                onProgress(AIProgress(0.05f, "Initializing CPGA"))
+                initialize()
+                val tflite = interpreter ?: return@withContext AIResult.Error(AIError.ModelUnavailable)
 
-            coroutineContext.ensureActive()
-            val source = loadBitmap(Uri.parse(sourceUri))
-                ?: return@withContext AIResult.Error(AIError.InvalidInput)
+                coroutineContext.ensureActive()
+                source = loadBitmap(Uri.parse(sourceUri))
+                    ?: return@withContext AIResult.Error(AIError.InvalidInput)
 
-            onProgress(AIProgress(0.2f, "Preparing low-light enhancement"))
-            val originalWidth = source.width
-            val originalHeight = source.height
+                onProgress(AIProgress(0.2f, "Preparing low-light enhancement"))
+                val originalWidth = source.width
+                val originalHeight = source.height
 
-            // Preserve aspect ratio by cropping the largest square or scaling appropriately
-            val cropSize = minOf(originalWidth, originalHeight)
-            val cropLeft = (originalWidth - cropSize) / 2
-            val cropTop = (originalHeight - cropSize) / 2
+                // Fit the whole image inside the fixed 256x256 model canvas without cropping.
+                // The model still receives a square tensor, while all original image content is preserved.
+                val scale = minOf(
+                    MODEL_SIZE.toFloat() / originalWidth.toFloat(),
+                    MODEL_SIZE.toFloat() / originalHeight.toFloat()
+                )
+                val fittedWidth = (originalWidth * scale).roundToInt().coerceIn(1, MODEL_SIZE)
+                val fittedHeight = (originalHeight * scale).roundToInt().coerceIn(1, MODEL_SIZE)
+                val offsetX = (MODEL_SIZE - fittedWidth) / 2
+                val offsetY = (MODEL_SIZE - fittedHeight) / 2
 
-            val croppedSquare = Bitmap.createBitmap(source, cropLeft, cropTop, cropSize, cropSize)
-            val modelInput = Bitmap.createScaledBitmap(croppedSquare, MODEL_SIZE, MODEL_SIZE, true)
-            if (croppedSquare !== source && croppedSquare !== modelInput) {
-                croppedSquare.recycle()
+                val resized = Bitmap.createScaledBitmap(source, fittedWidth, fittedHeight, true)
+                fittedInput = Bitmap.createBitmap(MODEL_SIZE, MODEL_SIZE, Bitmap.Config.ARGB_8888)
+                Canvas(fittedInput!!).apply {
+                    drawColor(Color.BLACK)
+                    drawBitmap(resized, offsetX.toFloat(), offsetY.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG))
+                }
+                if (resized !== source) resized.recycle()
+
+                coroutineContext.ensureActive()
+                val input = bitmapToNchwBuffer(fittedInput!!)
+                fittedInput?.recycle()
+                fittedInput = null
+
+                val output = ByteBuffer.allocateDirect(1 * 3 * MODEL_SIZE * MODEL_SIZE * 4)
+                    .order(ByteOrder.nativeOrder())
+
+                coroutineContext.ensureActive()
+                onProgress(AIProgress(0.5f, "Running AI enhancement"))
+                tflite.run(input, output)
+                output.rewind()
+
+                coroutineContext.ensureActive()
+                onProgress(AIProgress(0.8f, "Reconstructing result"))
+                enhancedTile = outputToBitmap(output)
+
+                // Extract only the enhanced region that corresponds to the original image.
+                enhancedRegion = Bitmap.createBitmap(
+                    enhancedTile!!,
+                    offsetX,
+                    offsetY,
+                    fittedWidth,
+                    fittedHeight
+                )
+                enhancedTile?.recycle()
+                enhancedTile = null
+
+                // Resize the enhanced region back to the ORIGINAL dimensions and replace only
+                // the image area. No original pixels are cropped away.
+                val enhancedOriginal = Bitmap.createScaledBitmap(
+                    enhancedRegion!!,
+                    originalWidth,
+                    originalHeight,
+                    true
+                )
+                enhancedRegion?.recycle()
+                enhancedRegion = null
+
+                val resultBitmap = enhancedOriginal
+
+                source?.recycle()
+                source = null
+
+                val file = File(appContext.cacheDir, "ai_cpga_${System.currentTimeMillis()}.png")
+                FileOutputStream(file).use { stream ->
+                    check(
+                        resultBitmap.compress(
+                            Bitmap.CompressFormat.PNG,
+                            100,
+                            stream
+                        )
+                    ) { "Failed to encode CPGA result" }
+                }
+                resultBitmap.recycle()
+
+                val contentUri = FileProvider.getUriForFile(
+                    appContext,
+                    "${appContext.packageName}.fileprovider",
+                    file
+                )
+
+                onProgress(AIProgress(1f, "Complete"))
+                AIResult.Success(contentUri.toString(), "Enhance", AIProviderType.ON_DEVICE)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                AIResult.Error(AIError.Unknown(t.message ?: "CPGA inference failed"))
+            } finally {
+                fittedInput?.recycle()
+                enhancedTile?.recycle()
+                enhancedRegion?.recycle()
+                source?.recycle()
             }
-
-            coroutineContext.ensureActive()
-            val input = bitmapToNchwBuffer(modelInput)
-            modelInput.recycle()
-
-            val output = ByteBuffer.allocateDirect(1 * 3 * MODEL_SIZE * MODEL_SIZE * 4)
-                .order(ByteOrder.nativeOrder())
-
-            coroutineContext.ensureActive()
-            onProgress(AIProgress(0.5f, "Running AI enhancement"))
-            tflite.run(input, output)
-            output.rewind()
-
-            coroutineContext.ensureActive()
-            onProgress(AIProgress(0.8f, "Reconstructing result"))
-            val enhancedTile = outputToBitmap(output)
-
-            // Scale enhanced tile back to original square dimensions
-            val enhancedSquare = Bitmap.createScaledBitmap(enhancedTile, cropSize, cropSize, true)
-            enhancedTile.recycle()
-
-            // Reconstruct back onto the original dimensions preserving aspect ratio
-            val resultBitmap = source.copy(Bitmap.Config.ARGB_8888, true)
-            val canvas = Canvas(resultBitmap)
-            canvas.drawBitmap(enhancedSquare, cropLeft.toFloat(), cropTop.toFloat(), null)
-            enhancedSquare.recycle()
-            source.recycle()
-
-            val file = File(appContext.cacheDir, "ai_cpga_${System.currentTimeMillis()}.png")
-            FileOutputStream(file).use { stream ->
-                check(resultBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) { "Failed to encode CPGA result" }
-            }
-            resultBitmap.recycle()
-
-            val contentUri = FileProvider.getUriForFile(
-                appContext,
-                "${appContext.packageName}.fileprovider",
-                file
-            )
-
-            onProgress(AIProgress(1f, "Complete"))
-            AIResult.Success(contentUri.toString(), "Enhance", AIProviderType.ON_DEVICE)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            AIResult.Error(AIError.Unknown(t.message ?: "CPGA inference failed"))
         }
-    }
 
     private fun bitmapToNchwBuffer(bitmap: Bitmap): ByteBuffer {
         val pixels = IntArray(MODEL_SIZE * MODEL_SIZE)
@@ -148,9 +191,15 @@ class CpgaLowLightEngine(context: Context) {
         val buffer = ByteBuffer.allocateDirect(1 * 3 * MODEL_SIZE * MODEL_SIZE * 4)
             .order(ByteOrder.nativeOrder())
         val plane = pixels.size
-        for (i in pixels.indices) buffer.putFloat((Color.red(pixels[i]) / 255f).coerceIn(0f, 1f))
-        for (i in pixels.indices) buffer.putFloat((Color.green(pixels[i]) / 255f).coerceIn(0f, 1f))
-        for (i in pixels.indices) buffer.putFloat((Color.blue(pixels[i]) / 255f).coerceIn(0f, 1f))
+        for (i in pixels.indices) {
+            buffer.putFloat((Color.red(pixels[i]) / 255f).coerceIn(0f, 1f))
+        }
+        for (i in pixels.indices) {
+            buffer.putFloat((Color.green(pixels[i]) / 255f).coerceIn(0f, 1f))
+        }
+        for (i in pixels.indices) {
+            buffer.putFloat((Color.blue(pixels[i]) / 255f).coerceIn(0f, 1f))
+        }
         check(buffer.position() == plane * 3 * 4)
         buffer.rewind()
         return buffer
