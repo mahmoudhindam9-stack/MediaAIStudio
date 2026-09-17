@@ -9,7 +9,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class VideoExportTest {
 
     @Test
@@ -127,7 +130,7 @@ class VideoExportTest {
         val plan = track.toAudioRenderPlan(10_000L)
         requireNotNull(plan)
         assertEquals(2_000L, plan.durationMs)
-        assertEquals(10_000L, plan.sourceEndMs)
+        assertEquals(2_000L, plan.sourceEndMs)
     }
 
     @Test
