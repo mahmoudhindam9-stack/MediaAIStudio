@@ -48,7 +48,22 @@ class FallbackAssistantPlanner : AssistantPlanner {
             actions += AssistantAction.RemoveBackground
         }
 
-        if (containsAny(
+        val darkerRequest = containsAny(
+            normalized,
+            "darker",
+            "darken",
+            "less bright",
+            "less light",
+            "make it dark",
+            "make it darker",
+            "أغمق",
+            "غمق",
+            "غمقها",
+            "اقل إضاءة",
+            "أقل إضاءة"
+        )
+
+        if (darkerRequest || containsAny(
                 normalized,
                 "bright",
                 "brighter",
@@ -65,19 +80,7 @@ class FallbackAssistantPlanner : AssistantPlanner {
                 "افتحها"
             )
         ) {
-            val amount = if (containsAny(
-                    normalized,
-                    "darker",
-                    "darken",
-                    "less bright",
-                    "less light",
-                    "أغمق",
-                    "غمق",
-                    "غمقها",
-                    "اقل إضاءة",
-                    "أقل إضاءة"
-                )) -25f else 25f
-            actions += AssistantAction.AdjustBrightness(amount)
+            actions += AssistantAction.AdjustBrightness(if (darkerRequest) -25f else 25f)
         }
 
         if (containsAny(normalized, "contrast", "تباين", "التباين")) {
