@@ -1,5 +1,6 @@
 package com.example.projects
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.core.navigation.Screen
 import com.example.ui.components.AppTopBar
@@ -49,7 +51,7 @@ private enum class ProjectSort {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectsScreen(navController: androidx.navigation.NavController) {
+fun ProjectsScreen(navController: NavController) {
     val context = LocalContext.current
     val repository = remember { ProjectRepository(context) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -63,42 +65,28 @@ fun ProjectsScreen(navController: androidx.navigation.NavController) {
     var renameProject by remember { mutableStateOf<MediaProject?>(null) }
     var deleteProject by remember { mutableStateOf<MediaProject?>(null) }
     var projectWaitingForMedia by remember { mutableStateOf<String?>(null) }
+    var pickerMime by remember { mutableStateOf("*/*") }
 
     fun refresh() {
         projects = repository.getProjects()
     }
 
-    fun openProject(project: MediaProject) {
-        val sourceUri = project.sourceUri
-        if (sourceUri.isNullOrBlank()) {
-            projectWaitingForMedia = project.id
-            val mime = if (project.mediaType == MediaProjectType.VIDEO) "video/*" else "image/*"
-            mediaPickerLauncherPlaceholder(context = context, mimeType = mime)
-        } else {
-            when (project.mediaType) {
-                MediaProjectType.PHOTO -> navController.navigate(Screen.PhotoEditor(sourceUri))
-                MediaProjectType.VIDEO -> navController.navigate(Screen.VideoEditor(sourceUri))
-            }
-        }
-    }
-
-    var pickerMime by remember { mutableStateOf("*/*") }
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val projectId = projectWaitingForMedia
         projectWaitingForMedia = null
         if (uri != null && projectId != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             val type = if (pickerMime.startsWith("video/")) MediaProjectType.VIDEO else MediaProjectType.PHOTO
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
             repository.updateSource(projectId, uri.toString(), type)
             refresh()
-            repository.getProject(projectId)?.let { updated ->
-                when (updated.mediaType) {
-                    MediaProjectType.PHOTO -> navController.navigate(Screen.PhotoEditor(uri.toString()))
-                    MediaProjectType.VIDEO -> navController.navigate(Screen.VideoEditor(uri.toString()))
-                }
+            when (type) {
+                MediaProjectType.PHOTO -> navController.navigate(Screen.PhotoEditor(uri.toString()))
+                MediaProjectType.VIDEO -> navController.navigate(Screen.VideoEditor(uri.toString()))
             }
         }
     }
@@ -109,19 +97,31 @@ fun ProjectsScreen(navController: androidx.navigation.NavController) {
         mediaPicker.launch(arrayOf(pickerMime))
     }
 
+    fun openProject(project: MediaProject) {
+        val sourceUri = project.sourceUri
+        if (sourceUri.isNullOrBlank()) {
+            pickMediaFor(project)
+            return
+        }
+        when (project.mediaType) {
+            MediaProjectType.PHOTO -> navController.navigate(Screen.PhotoEditor(sourceUri))
+            MediaProjectType.VIDEO -> navController.navigate(Screen.VideoEditor(sourceUri))
+        }
+    }
+
     val visibleProjects = remember(projects, query, sort) {
         val filtered = projects.filter { it.name.contains(query.trim(), ignoreCase = true) }
         when (sort) {
             ProjectSort.RECENT -> filtered.sortedByDescending { it.updatedAt }
             ProjectSort.NAME -> filtered.sortedBy { it.name.lowercase(Locale.getDefault()) }
-            ProjectSort.TYPE -> filtered.sortedWith(compareBy<MediaProject> { it.mediaType.name }.thenByDescending { it.updatedAt })
+            ProjectSort.TYPE -> filtered.sortedWith(
+                compareBy<MediaProject> { it.mediaType.name }.thenByDescending { it.updatedAt }
+            )
         }
     }
 
     Scaffold(
-        topBar = {
-            AppTopBar(title = "Projects")
-        },
+        topBar = { AppTopBar(title = "Projects") },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
@@ -487,9 +487,4 @@ private fun RenameProjectDialog(
 private fun formatDate(timestamp: Long): String {
     if (timestamp <= 0L) return "Unknown date"
     return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
-}
-
-@Suppress("UNUSED_PARAMETER")
-private fun mediaPickerLauncherPlaceholder(context: android.content.Context, mimeType: String) {
-    // Kept intentionally empty; the actual launcher is created in ProjectsScreen.
 }
