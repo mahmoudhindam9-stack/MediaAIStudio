@@ -211,20 +211,42 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun processAssistantInstruction(instruction: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val action = aiAssistant.processInstruction(instruction)
-            when (action) {
-                is EditorAction.AdjustBrightness -> updateState { it.copy(brightness = it.brightness + action.value) }
-                is EditorAction.AdjustContrast -> updateState { it.copy(contrast = it.contrast + action.value) }
-                is EditorAction.AdjustSaturation -> updateState { it.copy(saturation = it.saturation + action.value) }
-                is EditorAction.AIBackgroundRemoval -> processAITool(AIRequest.BackgroundRemoval(state.value.uriString))
-                is EditorAction.AIEnhancement -> processAITool(AIRequest.Enhance(state.value.uriString, "auto"))
-                else -> { aiError.value = "Unrecognized instruction" }
+        // Obsolete
+    }
+
+    suspend fun executeAssistantPlan(
+        plan: com.example.ai.assistant.AssistantActionPlan
+    ): com.example.ai.assistant.AssistantResult {
+        val executor = PhotoEditorAssistantExecutor(this)
+        for (action in plan.actions) {
+            val result = executor.execute(action)
+            if (result is com.example.ai.assistant.AssistantExecutionResult.Failed) {
+                return com.example.ai.assistant.AssistantResult.Failed(result.message)
             }
-            if (action !is EditorAction.AIBackgroundRemoval && action !is EditorAction.AIEnhancement && action !is EditorAction.Unknown) {
-                commitState()
+            if (result is com.example.ai.assistant.AssistantExecutionResult.Unsupported) {
+                return com.example.ai.assistant.AssistantResult.Unsupported(
+                    plan.originalPrompt,
+                    result.message
+                )
             }
         }
+        commitState()
+        return com.example.ai.assistant.AssistantResult.Executed(plan)
+    }
+
+    fun buildAssistantContext(): com.example.ai.assistant.AssistantContext {
+        val current = state.value
+        return com.example.ai.assistant.AssistantContext(
+            mediaType = com.example.ai.assistant.MediaType.PHOTO,
+            hasSourceMedia = current.uriString.isNotBlank(),
+            currentBrightness = current.brightness,
+            currentContrast = current.contrast,
+            currentSaturation = current.saturation,
+            currentTemperature = current.temperature,
+            canUndo = canUndo(),
+            canRedo = canRedo(),
+            isBusy = isProcessing
+        )
     }
 
     fun acceptAiResult() {

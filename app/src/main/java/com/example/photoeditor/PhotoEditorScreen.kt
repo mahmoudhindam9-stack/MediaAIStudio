@@ -30,7 +30,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.ai.core.*
-
+import com.example.ai.assistant.ui.AssistantScreen
+import com.example.ai.assistant.AssistantActionPlan
+import com.example.ai.assistant.AssistantResult
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
@@ -54,6 +56,7 @@ fun PhotoEditorScreen(
     val coroutineScope = rememberCoroutineScope()
     
     var currentTab by remember { mutableStateOf("ADJUST") }
+    var showAssistant by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
 
     LaunchedEffect(uriString) {
@@ -327,8 +330,10 @@ fun PhotoEditorScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewModel: PhotoEditorViewModel, state: EditorState, fullW: Float, fullH: Float) {
+    var showAssistant by remember { mutableStateOf(false) }
     Column(modifier = Modifier.background(Color.DarkGray)) {
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -504,17 +509,11 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                             }
 
                             item { 
-                                var prompt by remember { mutableStateOf("") }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    OutlinedTextField(
-                                        value = prompt,
-                                        onValueChange = { prompt = it },
-                                        label = { Text(stringResource(R.string.ai_prompt_hint), color = Color.White) },
-                                        modifier = Modifier.width(200.dp).padding(4.dp),
-                                        textStyle = androidx.compose.ui.text.TextStyle(color = Color.White),
-                                        singleLine = true
-                                    )
-                                    Button(onClick = { if (prompt.isNotBlank()) viewModel.processAssistantInstruction(prompt) }, modifier = Modifier.padding(4.dp)) { Text(stringResource(R.string.ai_assistant)) }
+                                Button(
+                                    onClick = { showAssistant = true },
+                                    modifier = Modifier.padding(4.dp)
+                                ) { 
+                                    Text(stringResource(R.string.ai_assistant)) 
                                 }
                             }
                         }
@@ -550,6 +549,22 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                     text = { Text(stringResource(titleRes)) }
                 )
             }
+        }
+    }
+
+    if (showAssistant) {
+        ModalBottomSheet(
+            onDismissRequest = { showAssistant = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            AssistantScreen(
+                assistant = viewModel.aiAssistant,
+                contextBuilder = { viewModel.buildAssistantContext() },
+                onExecutePlan = { plan ->
+                    viewModel.executeAssistantPlan(plan)
+                },
+                onDismiss = { showAssistant = false }
+            )
         }
     }
 }
