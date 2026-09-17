@@ -18,7 +18,21 @@ data class VideoEditorState(
     val selectedItemId: String? = null,
     val aiSubtitleTrack: SubtitleTrack? = null,
     val aiTrackingData: List<TrackingKeyframe>? = null,
-    val aiSuggestedCuts: List<SuggestedCut>? = null
+    val aiSuggestedCuts: List<SuggestedCut>? = null,
+    val aiReframeKeyframes: List<ReframeKeyframe>? = null
+)
+
+/**
+ * AI-generated crop path retained by the editor so a later render stage can apply it.
+ * Values are normalized to the source frame and preserve the tracking result exactly.
+ */
+data class ReframeKeyframe(
+    val timeMs: Long,
+    val centerX: Float,
+    val centerY: Float,
+    val width: Float,
+    val height: Float,
+    val confidence: Float
 )
 
 /**
@@ -33,7 +47,7 @@ interface TimelineItem {
     var volume: Float
     var isMuted: Boolean
     var isDuckingEnabled: Boolean
-    
+
     val endTimeMs: Long get() = startTimeMs + durationMs
 }
 
@@ -46,7 +60,7 @@ data class VideoClip(
     override var volume: Float = 1.0f,
     override var isMuted: Boolean = false,
     override var isDuckingEnabled: Boolean = false, // Not usually used for video, but part of interface
-    
+
     val originalDurationMs: Long = 0L,
     val rotation: Float = 0f
 ) : TimelineItem
@@ -61,7 +75,7 @@ data class AudioClip(
     override var volume: Float = 1.0f,
     override var isMuted: Boolean = false,
     override var isDuckingEnabled: Boolean = false,
-    
+
     val originalDurationMs: Long = 0L,
     var fadeInDurationMs: Long = 0L,
     var fadeOutDurationMs: Long = 0L,
