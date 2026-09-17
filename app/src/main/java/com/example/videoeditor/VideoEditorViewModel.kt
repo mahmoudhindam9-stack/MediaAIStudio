@@ -1,105 +1,196 @@
 package com.example.videoeditor
 
 import android.app.Application
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import android.media.MediaMetadataRetriever
+import com.example.ai.generative.GenerativeEngine
+import com.example.ai.generative.GenerativeRequest
+import com.example.ai.generative.GenerativeType
+import com.example.ai.generative.JobState
+import com.example.ai.video.AIVideoEngine
+import com.example.ai.video.SuggestedCut
+import com.example.ai.video.VideoAnalysisResult
 import com.example.audio.AudioTrackType
 import com.example.audio.VoiceOverManagerImpl
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
-import com.example.ai.video.*
-import com.example.ai.generative.*
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 
 class VideoEditorViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(VideoEditorState())
     val state: StateFlow<VideoEditorState> = _state.asStateFlow()
-    
+
     private val history = mutableListOf<VideoEditorState>()
     private var historyIndex = -1
-    
+
     // The main player for previewing the timeline.
     val exoPlayer = ExoPlayer.Builder(application).build()
     private val aiEngine = AIVideoEngine(application)
     val generativeEngine = GenerativeEngine(application)
-    
+
     private val _aiMessages = MutableSharedFlow<String>()
     val aiMessages = _aiMessages.asSharedFlow()
-    
+
     private val voiceOverManager = VoiceOverManagerImpl(application)
-    
-    init {
-        // Track playback position
-        viewModelScope.launch {
-            while (true) {
-                delay(16)
-                if (exoPlayer.isPlaying) {
-                    _state.update { it.copy(playheadMs = exoPlayer.currentPosition) }
-                }
+
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            _state.update { it.copy(isPlaying = isPlaying) }
+            if (isPlaying) updateGlobalPositionFromPlayer()
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            updateGlobalPositionFromPlayer()
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int
+        ) {
+            updateGlobalPositionFromPlayer()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                _state.update { it.copy(playheadMs = it.durationMs, isPlaying = false) }
+            } else {
+                updateGlobalPositionFromPlayer()
             }
         }
     }
-    
-    fun addMedia(uris: List<String>, contentResolver: android.content.ContentResolver) {
+
+    init {
+        history.add(VideoEditorState())
+        historyIndex = 0
+        exoPlayer.addListener(playerListener)
+
+        // Update the global timeline playhead while playback runs. ExoPlayer's currentPosition
+        // is item-local when multiple MediaItems are concatenated, so convert it explicitly.
         viewModelScope.launch {
+            while (true) {
+                delay(100)
+                if (exoPlayer.isPlaying) updateGlobalPositionFromPlayer()
+            }
+        }
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun addMedia(uris: List<String>, contentResolver: android.content.ContentResolver) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val existingUris = _state.value.videoClips.mapTo(mutableSetOf()) { it.uri }
             val newClips = mutableListOf<VideoClip>()
+
             for (uriString in uris) {
-                var duration = 10000L
-                var rotation = 0f
-                try {
-                    val retriever = MediaMetadataRetriever()
-                    retriever.setDataSource(getApplication(), Uri.parse(uriString))
-                    val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-                    duration = time?.toLongOrNull() ?: 10000L
-                    rotation = rot?.toFloatOrNull() ?: 0f
-                    retriever.release()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                
-                newClips.add(VideoClip(
+                if (!existingUris.add(uriString)) continue
+                val metadata = readMediaMetadata(uriString)
+                val duration = metadata.first.coerceAtLeast(100L)
+                val rotation = metadata.second
+                newClips += VideoClip(
                     uri = uriString,
                     originalDurationMs = duration,
                     durationMs = duration,
                     rotation = rotation
-                ))
+                )
             }
 
-            val s = _state.value
-            val combinedClips = s.videoClips + newClips
-            val (recalculatedClips, totalDuration) = recalculateTimeline(combinedClips)
-            
-            updateState(s.copy(
-                videoClips = recalculatedClips,
-                durationMs = totalDuration,
-                selectedItemId = newClips.firstOrNull()?.id ?: s.selectedItemId
-            ))
+            if (newClips.isEmpty()) return@launch
+
+            val current = _state.value
+            val (recalculatedClips, totalDuration) = recalculateTimeline(current.videoClips + newClips)
+            updateState(
+                current.copy(
+                    videoClips = recalculatedClips,
+                    durationMs = totalDuration,
+                    selectedItemId = newClips.first().id,
+                    playheadMs = current.playheadMs.coerceIn(0L, totalDuration),
+                    isPlaying = false
+                )
+            )
             commitState()
             updatePlayerMedia()
         }
     }
-    
+
+    fun addAudio(uris: List<String>, contentResolver: android.content.ContentResolver) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val current = _state.value
+            val newTracks = uris.distinct().mapNotNull { uriString ->
+                val duration = readMediaMetadata(uriString).first
+                if (duration <= 0L) return@mapNotNull null
+                AudioClip(
+                    type = AudioTrackType.MUSIC,
+                    uri = uriString,
+                    startTimeMs = current.playheadMs.coerceAtLeast(0L),
+                    durationMs = duration,
+                    originalDurationMs = duration
+                )
+            }
+            if (newTracks.isEmpty()) return@launch
+            updateState(
+                current.copy(
+                    audioTracks = current.audioTracks + newTracks,
+                    selectedItemId = newTracks.first().id
+                )
+            )
+            commitState()
+        }
+    }
+
+    private fun readMediaMetadata(uriString: String): Pair<Long, Float> {
+        var duration = 0L
+        var rotation = 0f
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(getApplication(), Uri.parse(uriString))
+            duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?: 0L
+            rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toFloatOrNull()
+                ?: 0f
+        } catch (e: Exception) {
+            // The caller decides how to handle unavailable metadata.
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+        return duration to rotation
+    }
+
     private fun recalculateTimeline(clips: List<VideoClip>): Pair<List<VideoClip>, Long> {
         var currentTime = 0L
         val recalculated = clips.map { clip ->
-            val newClip = clip.copy(startTimeMs = currentTime)
-            currentTime += newClip.durationMs
+            val normalizedDuration = clip.durationMs.coerceAtLeast(100L)
+            val normalizedStart = clip.startTrimMs.coerceIn(0L, clip.originalDurationMs)
+            val maximumDuration = (clip.originalDurationMs - normalizedStart).coerceAtLeast(100L)
+            val duration = normalizedDuration.coerceAtMost(maximumDuration)
+            val newClip = clip.copy(
+                startTimeMs = currentTime,
+                startTrimMs = normalizedStart,
+                durationMs = duration
+            )
+            currentTime += duration
             newClip
         }
-        return Pair(recalculated, currentTime)
+        return recalculated to currentTime
     }
 
     fun validateTimelineState(): List<String> {
@@ -107,105 +198,127 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         val errors = mutableListOf<String>()
         val ids = mutableSetOf<String>()
         var expectedStart = 0L
+
         for (clip in s.videoClips) {
-            if (!ids.add(clip.id)) errors.add("Duplicate clip ID: ${clip.id}")
-            if (clip.startTrimMs < 0) errors.add("Negative startTrimMs on clip ${clip.id}")
-            if (clip.durationMs < 0) errors.add("Negative durationMs on clip ${clip.id}")
-            if (clip.startTrimMs + clip.durationMs > clip.originalDurationMs) errors.add("Invalid trim range on clip ${clip.id}")
-            if (clip.startTimeMs != expectedStart) errors.add("Invalid timeline ordering for clip ${clip.id}. Expected $expectedStart, got ${clip.startTimeMs}")
+            if (!ids.add(clip.id)) errors += "Duplicate timeline item ID: ${clip.id}"
+            if (clip.startTimeMs < 0L) errors += "Negative timeline start on clip ${clip.id}"
+            if (clip.startTrimMs < 0L) errors += "Negative startTrimMs on clip ${clip.id}"
+            if (clip.durationMs < 0L) errors += "Negative durationMs on clip ${clip.id}"
+            if (clip.originalDurationMs < 0L) errors += "Negative original duration on clip ${clip.id}"
+            if (clip.startTrimMs + clip.durationMs > clip.originalDurationMs) {
+                errors += "Invalid trim range on clip ${clip.id}"
+            }
+            if (clip.startTimeMs != expectedStart) {
+                errors += "Invalid timeline ordering for clip ${clip.id}. Expected $expectedStart, got ${clip.startTimeMs}"
+            }
             expectedStart += clip.durationMs
         }
-        if (s.playheadMs < 0 || s.playheadMs > s.durationMs) errors.add("Playhead outside duration")
-        if (s.selectedItemId != null && s.videoClips.none { it.id == s.selectedItemId } && s.audioTracks.none { it.id == s.selectedItemId }) {
-            errors.add("Invalid selectedItemId")
-        }
+
         for (audio in s.audioTracks) {
-            if (audio.startTimeMs < 0) errors.add("Negative start time on audio ${audio.id}")
+            if (!ids.add(audio.id)) errors += "Duplicate timeline item ID: ${audio.id}"
+            if (audio.startTimeMs < 0L) errors += "Negative start time on audio ${audio.id}"
+            if (audio.startTrimMs < 0L) errors += "Negative startTrimMs on audio ${audio.id}"
+            if (audio.durationMs < 0L) errors += "Negative durationMs on audio ${audio.id}"
+            if (audio.originalDurationMs < 0L) errors += "Negative original duration on audio ${audio.id}"
+            if (audio.startTrimMs + audio.durationMs > audio.originalDurationMs) {
+                errors += "Invalid trim range on audio ${audio.id}"
+            }
         }
+
+        if (s.durationMs != expectedStart) errors += "Duration mismatch. Expected $expectedStart, got ${s.durationMs}"
+        if (s.playheadMs < 0L || s.playheadMs > s.durationMs) errors += "Playhead outside duration"
+        if (s.selectedItemId != null && ids.none { it == s.selectedItemId }) errors += "Invalid selectedItemId"
         return errors
     }
 
     fun loadInitialMedia(uriString: String) {
-        if (_state.value.videoClips.isNotEmpty()) return // Already loaded
-        
+        if (_state.value.videoClips.isNotEmpty()) return
         viewModelScope.launch {
-            var duration = 10000L
-            var rotation = 0f
-            try {
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(getApplication(), Uri.parse(uriString))
-                val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-                duration = time?.toLongOrNull() ?: 10000L
-                rotation = rot?.toFloatOrNull() ?: 0f
-                retriever.release()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            
+            val metadata = readMediaMetadata(uriString)
+            val duration = metadata.first.coerceAtLeast(100L)
             val clip = VideoClip(
                 uri = uriString,
                 originalDurationMs = duration,
                 durationMs = duration,
-                rotation = rotation
+                rotation = metadata.second
             )
             val newState = _state.value.copy(
                 videoClips = listOf(clip),
-                durationMs = duration
+                durationMs = duration,
+                selectedItemId = clip.id,
+                playheadMs = 0L,
+                isPlaying = false
             )
             updateState(newState)
             commitState()
-            
             updatePlayerMedia()
         }
     }
-    
+
     private fun updatePlayerMedia() {
         val s = _state.value
-        // Note: For multi-track, ExoPlayer alone is insufficient without composition.
-        // But for basic preview, we sequence the video clips and rely on separate media items.
+        exoPlayer.pause()
         exoPlayer.clearMediaItems()
         s.videoClips.forEach { clip ->
             val mediaItem = MediaItem.Builder()
                 .setUri(Uri.parse(clip.uri))
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(clip.id).build())
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
                         .setStartPositionMs(clip.startTrimMs)
                         .setEndPositionMs(clip.startTrimMs + clip.durationMs)
                         .build()
-                ).build()
+                )
+                .build()
             exoPlayer.addMediaItem(mediaItem)
         }
+        if (s.videoClips.isEmpty()) {
+            exoPlayer.stop()
+            return
+        }
         exoPlayer.prepare()
-        exoPlayer.seekTo(s.playheadMs)
+        seekPlayerToGlobal(s.playheadMs)
     }
-    
+
+    private fun updateGlobalPositionFromPlayer() {
+        val s = _state.value
+        val index = exoPlayer.currentMediaItemIndex
+        if (index == C.INDEX_UNSET) return
+        val clip = s.videoClips.getOrNull(index) ?: return
+        val global = (clip.startTimeMs + exoPlayer.currentPosition).coerceIn(0L, s.durationMs)
+        _state.update { it.copy(playheadMs = global) }
+    }
+
+    private fun seekPlayerToGlobal(positionMs: Long) {
+        val s = _state.value
+        if (s.videoClips.isEmpty()) return
+        val position = positionMs.coerceIn(0L, s.durationMs)
+        val targetIndex = when {
+            position >= s.durationMs -> s.videoClips.lastIndex
+            else -> s.videoClips.indexOfFirst { position >= it.startTimeMs && position < it.endTimeMs }
+        }.let { if (it < 0) 0 else it }
+        val clip = s.videoClips[targetIndex]
+        val offset = if (position >= s.durationMs) clip.durationMs else (position - clip.startTimeMs).coerceIn(0L, clip.durationMs)
+        exoPlayer.seekTo(targetIndex, offset)
+    }
+
     fun updateState(newState: VideoEditorState) {
         _state.value = newState
     }
-    
+
     fun commitState() {
         if (historyIndex < history.size - 1) {
             history.subList(historyIndex + 1, history.size).clear()
         }
-        history.add(_state.value.copy())
+        history += _state.value.copy()
         historyIndex++
-        
         autosave()
     }
-    
+
     private fun autosave() {
-        viewModelScope.launch {
-            try {
-                // simple json serialization logic can be used here if needed
-                // just stubbing out the autosave operation to satisfy the requirement
-                // A complete implementation would write to Room or SharedPreferences.
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        // Full project persistence is intentionally handled in the project-persistence phase.
     }
-    
+
     fun undo() {
         if (historyIndex > 0) {
             historyIndex--
@@ -213,7 +326,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             updatePlayerMedia()
         }
     }
-    
+
     fun redo() {
         if (historyIndex < history.size - 1) {
             historyIndex++
@@ -221,121 +334,185 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             updatePlayerMedia()
         }
     }
-    
+
     fun selectItem(id: String?) {
         updateState(_state.value.copy(selectedItemId = id))
     }
-    
+
     fun trimSelectedClip(startOffset: Long, endOffset: Long) {
         val s = _state.value
         val id = s.selectedItemId ?: return
-        
-        val newVideoClips = s.videoClips.map {
-            if (it.id == id) {
-                // Ensure valid trim range
-                val newStart = startOffset.coerceAtLeast(0L)
-                val newDuration = (endOffset - startOffset).coerceAtLeast(100L).coerceAtMost(it.originalDurationMs - newStart)
-                it.copy(
-                    startTrimMs = newStart,
-                    durationMs = newDuration
-                )
-            } else it
+        val startIsVideo = s.videoClips.any { it.id == id }
+        val startIsAudio = s.audioTracks.any { it.id == id }
+        if (!startIsVideo && !startIsAudio) return
+
+        fun normalizedRange(originalDurationMs: Long): Pair<Long, Long>? {
+            val start = startOffset.coerceIn(0L, originalDurationMs)
+            val end = endOffset.coerceIn(0L, originalDurationMs)
+            if (end <= start || end - start < 100L) return null
+            return start to end
         }
-        val newAudioClips = s.audioTracks.map {
-            if (it.id == id) {
-                val newStart = startOffset.coerceAtLeast(0L)
-                val newDuration = (endOffset - startOffset).coerceAtLeast(100L).coerceAtMost(it.originalDurationMs - newStart)
-                it.copy(
-                    startTrimMs = newStart,
-                    durationMs = newDuration
+
+        if (startIsVideo) {
+            val clip = s.videoClips.first { it.id == id }
+            val range = normalizedRange(clip.originalDurationMs) ?: return
+            val updated = s.videoClips.map {
+                if (it.id == id) it.copy(startTrimMs = range.first, durationMs = range.second - range.first) else it
+            }
+            val (recalculated, total) = recalculateTimeline(updated)
+            updateState(
+                s.copy(
+                    videoClips = recalculated,
+                    durationMs = total,
+                    playheadMs = s.playheadMs.coerceIn(0L, total),
+                    isPlaying = false
                 )
-            } else it
+            )
+            commitState()
+            updatePlayerMedia()
+        } else {
+            val audio = s.audioTracks.first { it.id == id }
+            val range = normalizedRange(audio.originalDurationMs) ?: return
+            val updated = s.audioTracks.map {
+                if (it.id == id) it.copy(startTrimMs = range.first, durationMs = range.second - range.first) else it
+            }
+            updateState(s.copy(audioTracks = updated))
+            commitState()
         }
-        
-        val (recalculatedClips, totalDuration) = recalculateTimeline(newVideoClips)
-        val newPlayhead = s.playheadMs.coerceIn(0L, totalDuration)
-        
-        updateState(s.copy(
-            videoClips = recalculatedClips,
-            audioTracks = newAudioClips,
-            durationMs = totalDuration,
-            playheadMs = newPlayhead
-        ))
-        commitState()
-        updatePlayerMedia()
     }
 
     fun deleteSelectedClip() {
         val s = _state.value
         val id = s.selectedItemId ?: return
-        
         val videoIndex = s.videoClips.indexOfFirst { it.id == id }
-        val newVideoClips = s.videoClips.filter { it.id != id }
-        val newAudioClips = s.audioTracks.filter { it.id != id }
-        
-        val (recalculatedClips, totalDuration) = recalculateTimeline(newVideoClips)
-        
-        // Select neighboring clip when possible
-        val nextSelection = if (recalculatedClips.isNotEmpty() && videoIndex != -1) {
-            recalculatedClips[videoIndex.coerceAtMost(recalculatedClips.size - 1)].id
-        } else {
-            null
-        }
-        val newPlayhead = s.playheadMs.coerceIn(0L, totalDuration)
 
-        updateState(s.copy(
-            videoClips = recalculatedClips,
-            audioTracks = newAudioClips,
-            selectedItemId = nextSelection,
-            durationMs = totalDuration,
-            playheadMs = newPlayhead
-        ))
-        commitState()
-        updatePlayerMedia()
+        if (videoIndex >= 0) {
+            val newVideoClips = s.videoClips.toMutableList().apply { removeAt(videoIndex) }
+            val (recalculated, total) = recalculateTimeline(newVideoClips)
+            val nextSelection = recalculated.getOrNull(videoIndex.coerceAtMost(recalculated.lastIndex))?.id
+            updateState(
+                s.copy(
+                    videoClips = recalculated,
+                    durationMs = total,
+                    selectedItemId = nextSelection,
+                    playheadMs = s.playheadMs.coerceIn(0L, total),
+                    isPlaying = false
+                )
+            )
+            commitState()
+            updatePlayerMedia()
+            return
+        }
+
+        val audioIndex = s.audioTracks.indexOfFirst { it.id == id }
+        if (audioIndex >= 0) {
+            val newAudio = s.audioTracks.toMutableList().apply { removeAt(audioIndex) }
+            val nextSelection = newAudio.getOrNull(audioIndex.coerceAtMost(newAudio.lastIndex))?.id
+                ?: s.videoClips.getOrNull(0)?.id
+            updateState(s.copy(audioTracks = newAudio, selectedItemId = nextSelection))
+            commitState()
+        }
     }
-    
+
     fun splitSelectedClip() {
         val s = _state.value
         val id = s.selectedItemId ?: return
-        val playhead = s.playheadMs
-        
-        // Find if it's a video clip
-        val videoIndex = s.videoClips.indexOfFirst { it.id == id }
-        if (videoIndex != -1) {
-            val clip = s.videoClips[videoIndex]
-            if (playhead > clip.startTimeMs && playhead < clip.startTimeMs + clip.durationMs) {
-                val cutOffset = playhead - clip.startTimeMs
-                val clip1 = clip.copy(
-                    durationMs = cutOffset
-                )
-                val clip2 = clip.copy(
-                    id = UUID.randomUUID().toString(),
-                    startTrimMs = clip.startTrimMs + cutOffset,
-                    durationMs = clip.durationMs - cutOffset
-                )
-                val newClips = s.videoClips.toMutableList().apply {
-                    set(videoIndex, clip1)
-                    add(videoIndex + 1, clip2)
-                }
-                
-                val (recalculatedClips, totalDuration) = recalculateTimeline(newClips)
-                
-                updateState(s.copy(
-                    videoClips = recalculatedClips,
-                    durationMs = totalDuration,
-                    selectedItemId = clip2.id // Select the new clip
-                ))
-                commitState()
-                updatePlayerMedia()
-            }
+        val index = s.videoClips.indexOfFirst { it.id == id }
+        if (index < 0) return
+
+        val clip = s.videoClips[index]
+        val cutOffset = s.playheadMs - clip.startTimeMs
+        if (cutOffset < 100L || clip.durationMs - cutOffset < 100L) return
+
+        val first = clip.copy(durationMs = cutOffset)
+        val second = clip.copy(
+            id = UUID.randomUUID().toString(),
+            startTrimMs = clip.startTrimMs + cutOffset,
+            durationMs = clip.durationMs - cutOffset
+        )
+        val newClips = s.videoClips.toMutableList().apply {
+            set(index, first)
+            add(index + 1, second)
+        }
+        val (recalculated, total) = recalculateTimeline(newClips)
+        updateState(
+            s.copy(
+                videoClips = recalculated,
+                durationMs = total,
+                selectedItemId = second.id,
+                isPlaying = false
+            )
+        )
+        commitState()
+        updatePlayerMedia()
+    }
+
+    fun seekTo(positionMs: Long) {
+        val position = positionMs.coerceIn(0L, _state.value.durationMs)
+        _state.update { it.copy(playheadMs = position) }
+        seekPlayerToGlobal(position)
+    }
+
+    fun togglePlayback() {
+        if (_state.value.videoClips.isEmpty()) return
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        } else {
+            if (_state.value.playheadMs >= _state.value.durationMs) seekTo(0L)
+            exoPlayer.play()
         }
     }
-    
-    fun seekTo(positionMs: Long) {
-        exoPlayer.seekTo(positionMs)
-        _state.update { it.copy(playheadMs = positionMs) }
+
+    fun setSelectedVolume(volume: Float) {
+        val id = _state.value.selectedItemId ?: return
+        val normalized = volume.coerceIn(0f, 1f)
+        val newState = _state.value.copy(
+            videoClips = _state.value.videoClips.map { if (it.id == id) it.copy(volume = normalized) else it },
+            audioTracks = _state.value.audioTracks.map { if (it.id == id) it.copy(volume = normalized) else it }
+        )
+        if (newState != _state.value) {
+            updateState(newState)
+            commitState()
+        }
     }
-    
+
+    fun toggleSelectedMute() {
+        val id = _state.value.selectedItemId ?: return
+        val newState = _state.value.copy(
+            videoClips = _state.value.videoClips.map { if (it.id == id) it.copy(isMuted = !it.isMuted) else it },
+            audioTracks = _state.value.audioTracks.map { if (it.id == id) it.copy(isMuted = !it.isMuted) else it }
+        )
+        if (newState != _state.value) {
+            updateState(newState)
+            commitState()
+        }
+    }
+
+    fun moveSelectedClipLeft() {
+        moveSelectedClip(-1)
+    }
+
+    fun moveSelectedClipRight() {
+        moveSelectedClip(1)
+    }
+
+    private fun moveSelectedClip(delta: Int) {
+        val s = _state.value
+        val id = s.selectedItemId ?: return
+        val index = s.videoClips.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val target = index + delta
+        if (target !in s.videoClips.indices) return
+        val reordered = s.videoClips.toMutableList().apply {
+            val item = removeAt(index)
+            add(target, item)
+        }
+        val (recalculated, total) = recalculateTimeline(reordered)
+        updateState(s.copy(videoClips = recalculated, durationMs = total, isPlaying = false))
+        commitState()
+        updatePlayerMedia()
+    }
+
     var isRecordingVoiceOver = false
         private set
 
@@ -343,185 +520,202 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         if (isRecordingVoiceOver) {
             voiceOverManager.stopVoiceOverSession()
             isRecordingVoiceOver = false
-            
-            // Add track
             val track = voiceOverManager.getRecordedTrack()
             if (track != null) {
-                var duration = 1000L
-                try {
-                    val retriever = MediaMetadataRetriever()
-                    retriever.setDataSource(track.uri)
-                    val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    duration = time?.toLongOrNull() ?: 1000L
-                    retriever.release()
-                } catch (e: Exception) {}
-                
+                val duration = readMediaMetadata(track.uri).first.coerceAtLeast(100L)
                 val audioClip = AudioClip(
                     type = AudioTrackType.VOICE_OVER,
                     uri = track.uri,
-                    startTimeMs = track.startTimeMs,
+                    startTimeMs = track.startTimeMs.coerceAtLeast(0L),
                     durationMs = duration,
                     originalDurationMs = duration
                 )
-                updateState(_state.value.copy(audioTracks = _state.value.audioTracks + audioClip))
+                updateState(_state.value.copy(audioTracks = _state.value.audioTracks + audioClip, selectedItemId = audioClip.id))
                 commitState()
             }
             exoPlayer.pause()
         } else {
             exoPlayer.play()
-            voiceOverManager.startVoiceOverSession(exoPlayer.currentPosition)
+            voiceOverManager.startVoiceOverSession(_state.value.playheadMs)
             isRecordingVoiceOver = true
         }
     }
-    
-    
+
     fun runObjectTracking() {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri ?: return
+        val uri = _state.value.videoClips.firstOrNull()?.uri ?: return
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_running_tracking))
-            val result = aiEngine.tracking.analyze(uri)
-            if (result is VideoAnalysisResult.Tracking) {
-                updateState(s.copy(aiTrackingData = result.keyframes))
-                commitState()
-                _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_tracking_complete))
-            } else if (result is VideoAnalysisResult.Error) {
-                _aiMessages.emit(result.message)
+            when (val result = aiEngine.tracking.analyze(uri)) {
+                is VideoAnalysisResult.Tracking -> {
+                    updateState(_state.value.copy(aiTrackingData = result.keyframes))
+                    commitState()
+                    _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_tracking_complete))
+                }
+                is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
+                else -> Unit
             }
         }
     }
 
     fun runSmartCut() {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri ?: return
+        val uri = _state.value.videoClips.firstOrNull()?.uri ?: return
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_analyzing_cuts))
-            val result = aiEngine.smartCut.analyze(uri)
-            if (result is VideoAnalysisResult.SmartCuts) {
-                updateState(s.copy(aiSuggestedCuts = result.suggestedCuts))
-                // We do NOT commit state here to avoid auto-applying. User must review.
-                _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_cuts_suggested))
-            } else if (result is VideoAnalysisResult.Error) {
-                _aiMessages.emit(result.message)
+            when (val result = aiEngine.smartCut.analyze(uri)) {
+                is VideoAnalysisResult.SmartCuts -> {
+                    updateState(_state.value.copy(aiSuggestedCuts = result.suggestedCuts))
+                    _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_cuts_suggested))
+                }
+                is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
+                else -> Unit
             }
         }
     }
-    
+
+    private fun normalizeExcludedIntervals(cuts: List<SuggestedCut>, clip: VideoClip): List<Pair<Long, Long>> {
+        val clipStart = clip.startTrimMs
+        val clipEnd = clip.startTrimMs + clip.durationMs
+        return cuts.mapNotNull { cut ->
+            val start = cut.startTimeMs.coerceIn(clipStart, clipEnd)
+            val end = cut.endTimeMs.coerceIn(clipStart, clipEnd)
+            if (end > start) start to end else null
+        }.sortedBy { it.first }.fold(mutableListOf()) { acc, interval ->
+            val last = acc.lastOrNull()
+            if (last == null || interval.first > last.second) {
+                acc += interval
+            } else {
+                acc[acc.lastIndex] = last.first to maxOf(last.second, interval.second)
+            }
+            acc
+        }
+    }
+
     fun applySmartCuts() {
         val s = _state.value
         val cuts = s.aiSuggestedCuts ?: return
-        
-        val targetClip = s.videoClips.firstOrNull { it.id == s.selectedItemId } 
-            ?: s.videoClips.firstOrNull() 
-            ?: return
-
-        val keepIntervals = mutableListOf<Pair<Long, Long>>()
-        var currentStart = targetClip.startTrimMs
-        val targetEnd = targetClip.startTrimMs + targetClip.durationMs
-        
-        val sortedCuts = cuts.sortedBy { it.startTimeMs }
-        for (cut in sortedCuts) {
-            val cutStart = cut.startTimeMs.coerceIn(currentStart, targetEnd)
-            val cutEnd = cut.endTimeMs.coerceIn(currentStart, targetEnd)
-            if (cutStart > currentStart) {
-                keepIntervals.add(Pair(currentStart, cutStart))
-            }
-            currentStart = maxOf(currentStart, cutEnd)
+        val targetIndex = s.videoClips.indexOfFirst { it.id == s.selectedItemId }.let {
+            if (it >= 0) it else 0
         }
-        if (currentStart < targetEnd) {
-            keepIntervals.add(Pair(currentStart, targetEnd))
+        val target = s.videoClips.getOrNull(targetIndex) ?: return
+        val excluded = normalizeExcludedIntervals(cuts, target)
+        if (excluded.isEmpty()) {
+            rejectSmartCuts()
+            return
         }
 
-        val newClips = keepIntervals.map { (start, end) ->
-            targetClip.copy(
+        val kept = mutableListOf<Pair<Long, Long>>()
+        var cursor = target.startTrimMs
+        val targetEnd = target.startTrimMs + target.durationMs
+        for ((start, end) in excluded) {
+            if (start > cursor) kept += cursor to start
+            cursor = maxOf(cursor, end)
+        }
+        if (cursor < targetEnd) kept += cursor to targetEnd
+
+        val validKept = kept.filter { it.second - it.first >= 100L }
+        if (validKept.isEmpty()) {
+            _aiMessages.tryEmit("Smart Cut produced no valid remaining video.")
+            return
+        }
+
+        val generated = validKept.map { (start, end) ->
+            target.copy(
                 id = UUID.randomUUID().toString(),
                 startTrimMs = start,
                 durationMs = end - start
             )
         }
-
-        val targetIndex = s.videoClips.indexOf(targetClip)
-        val combinedClips = s.videoClips.toMutableList().apply {
+        val combined = s.videoClips.toMutableList().apply {
             removeAt(targetIndex)
-            addAll(targetIndex, newClips)
+            addAll(targetIndex, generated)
         }
-        
-        val (recalculatedClips, totalDuration) = recalculateTimeline(combinedClips)
-
-        updateState(s.copy(
-            videoClips = recalculatedClips,
-            durationMs = totalDuration,
-            aiSuggestedCuts = null,
-            selectedItemId = newClips.firstOrNull()?.id ?: s.selectedItemId
-        ))
+        val (recalculated, total) = recalculateTimeline(combined)
+        updateState(
+            s.copy(
+                videoClips = recalculated,
+                durationMs = total,
+                aiSuggestedCuts = null,
+                selectedItemId = generated.first().id,
+                playheadMs = s.playheadMs.coerceIn(0L, total),
+                isPlaying = false
+            )
+        )
         commitState()
         updatePlayerMedia()
     }
-    
+
     fun rejectSmartCuts() {
         updateState(_state.value.copy(aiSuggestedCuts = null))
     }
 
     fun runAutoCaptions() {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri ?: return
+        val uri = _state.value.videoClips.firstOrNull()?.uri ?: return
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_generating_captions))
-            val result = aiEngine.autoCaption.generate(uri)
-            if (result is VideoAnalysisResult.AutoCaptions) {
-                updateState(s.copy(aiSubtitleTrack = result.track))
-                commitState()
-                _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_captions_generated))
-            } else if (result is VideoAnalysisResult.Error) {
-                _aiMessages.emit(result.message)
+            when (val result = aiEngine.autoCaption.generate(uri)) {
+                is VideoAnalysisResult.AutoCaptions -> {
+                    updateState(_state.value.copy(aiSubtitleTrack = result.track))
+                    commitState()
+                    _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_captions_generated))
+                }
+                is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
+                else -> Unit
             }
         }
     }
 
     fun runSmartReframe() {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri ?: return
+        val uri = _state.value.videoClips.firstOrNull()?.uri ?: return
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_generating_reframe))
-            val result = aiEngine.smartReframe.process(uri)
-            if (result is VideoAnalysisResult.SmartReframe) {
-                _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_reframe_generated, result.cropPaths.size))
-            } else if (result is VideoAnalysisResult.Error) {
-                _aiMessages.emit(result.message)
+            when (val result = aiEngine.smartReframe.process(uri)) {
+                is VideoAnalysisResult.SmartReframe -> {
+                    val keyframes = result.cropPaths.map {
+                        ReframeKeyframe(
+                            timeMs = it.timeMs,
+                            centerX = it.x,
+                            centerY = it.y,
+                            width = it.width,
+                            height = it.height,
+                            confidence = it.confidence
+                        )
+                    }
+                    updateState(_state.value.copy(aiReframeKeyframes = keyframes))
+                    commitState()
+                    _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_reframe_generated, keyframes.size))
+                }
+                is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
+                else -> Unit
             }
         }
     }
 
     fun runEnhancement() {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri ?: return
+        val uri = _state.value.videoClips.firstOrNull()?.uri ?: return
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_enhancing))
-            val result = aiEngine.enhancement.enhance(uri)
-            if (result is VideoAnalysisResult.Error) {
-                _aiMessages.emit(result.message)
+            when (val result = aiEngine.enhancement.enhance(uri)) {
+                is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
+                else -> _aiMessages.emit("Video enhancement is unavailable on this device/backend.")
             }
         }
     }
-    
-    
+
     fun runGenerativeVideo(type: GenerativeType, prompt: String) {
-        val s = _state.value
-        val uri = s.videoClips.firstOrNull()?.uri
+        val uri = _state.value.videoClips.firstOrNull()?.uri
         if (uri == null) {
             viewModelScope.launch { _aiMessages.emit("No source video for generation") }
             return
         }
-        
+
         val req = GenerativeRequest(
             type = type,
-            sourceUri = android.net.Uri.parse(uri),
+            sourceUri = Uri.parse(uri),
             prompt = prompt
         )
         val jobId = generativeEngine.submitJob(req)
         viewModelScope.launch {
             _aiMessages.emit("Generative Job $jobId submitted.")
-            // Monitor job state
             generativeEngine.jobs.collect { jobs ->
                 val job = jobs[jobId]
                 if (job != null) {
@@ -534,9 +728,10 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
     }
-    
+
     override fun onCleared() {
-        super.onCleared()
+        exoPlayer.removeListener(playerListener)
         exoPlayer.release()
+        super.onCleared()
     }
 }
