@@ -440,7 +440,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                             .padding(3.dp)
                             .background(Color.Black.copy(alpha = 0.7f), CircleShape)
                             .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) { Text("▶", color = Color.White, fontSize = androidx.compose.ui.unit.sp(10)) }
+                    ) { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp)) }
                 }
             }
         }
