@@ -30,17 +30,31 @@ class AppModelManager(context: Context) : ModelManager {
         ): ModelInfo {
             val artifact = artifacts.artifact(id)
             val stateHolder = artifacts.getArtifactState(id)
+
+            // Do not perform ONNX/TFLite graph validation from the Compose/UI thread.
+            // Models live under filesDir/models and therefore survive normal APK updates.
+            // Final validation remains in ensureModel()/downloadModel() on a worker dispatcher.
+            val lightweightReady = artifact?.let {
+                val file = artifacts.localFile(it)
+                file.isFile && file.length() >= it.minimumBytes
+            } == true
+            val effectiveState = when {
+                stateHolder.state != ModelInstallState.NOT_INSTALLED -> stateHolder.state
+                lightweightReady -> ModelInstallState.READY
+                else -> ModelInstallState.NOT_INSTALLED
+            }
+
             return ModelInfo(
                 id = id,
                 name = name,
                 description = description,
                 sizeBytes = defaultSizeBytes,
-                status = stateHolder.state,
-                progress = stateHolder.progress,
+                status = effectiveState,
+                progress = if (effectiveState == ModelInstallState.READY) 100 else stateHolder.progress,
                 errorMessage = stateHolder.errorMessage,
-                currentBytes = stateHolder.currentBytes,
+                currentBytes = if (lightweightReady) artifacts.localFile(requireNotNull(artifact)).length() else stateHolder.currentBytes,
                 expectedBytes = stateHolder.expectedBytes ?: defaultSizeBytes,
-                checksumValid = stateHolder.checksumValid,
+                checksumValid = if (effectiveState == ModelInstallState.READY && sha256 != null) true else stateHolder.checksumValid,
                 version = version,
                 license = license,
                 sha256 = sha256,
@@ -110,22 +124,24 @@ class AppModelManager(context: Context) : ModelManager {
     override suspend fun deleteModel(id: String): Boolean = artifacts.deleteModel(id)
 
     override fun getCapabilityStatus(capability: AICapability): AICapabilityStatus {
-        fun installed(id: String): Boolean {
+        fun present(id: String): Boolean {
             val artifact = artifacts.artifact(id) ?: return false
             val file = artifacts.localFile(artifact)
-            return file.exists() && artifacts.isValid(file, artifact)
+            // Capability UI must remain non-blocking. Actual structural validation happens
+            // when the engine calls ensureModel() from a background coroutine.
+            return file.isFile && file.length() >= artifact.minimumBytes
         }
 
         return when (capability) {
             AICapability.BACKGROUND_REMOVAL -> AICapabilityStatus.AVAILABLE
             AICapability.OBJECT_DETECTION -> AICapabilityStatus.AVAILABLE
-            AICapability.OBJECT_REMOVAL -> if (installed("llama/inpainting_lama_2025jan")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
-            AICapability.UPSCALE -> if (installed("realesrgan_x2plus")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
-            AICapability.ENHANCEMENT -> if (installed("cpga_fp16")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
+            AICapability.OBJECT_REMOVAL -> if (present("llama/inpainting_lama_2025jan")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
+            AICapability.UPSCALE -> if (present("realesrgan_x2plus")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
+            AICapability.ENHANCEMENT -> if (present("cpga_fp16")) AICapabilityStatus.AVAILABLE else AICapabilityStatus.REQUIRES_MODEL
             AICapability.RESTYLE,
             AICapability.GENERATIVE_FILL,
             AICapability.OBJECT_REPLACEMENT,
-            AICapability.IMAGE_TO_IMAGE -> AICapabilityStatus.REQUIRES_PROVIDER
+            AICapability.IMAGE_TO_IMAGE -> AICapabilityStatus.REQUIRES_CLOUD
             AICapability.VIDEO_OBJECT_DETECTION,
             AICapability.VIDEO_OBJECT_TRACKING,
             AICapability.SMART_CUT,
