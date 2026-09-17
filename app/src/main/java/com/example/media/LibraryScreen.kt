@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.example.media
 
 import android.Manifest
@@ -7,8 +9,6 @@ import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -45,7 +45,9 @@ import com.example.core.permission.PermissionManagerImpl
 import com.example.ui.components.EmptyState
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+enum class MediaGalleryTab { PHOTOS, VIDEOS }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(
     onNavigateToMediaDetail: (String) -> Unit,
@@ -60,6 +62,7 @@ fun LibraryScreen(
     var isLoading by remember { mutableStateOf(true) }
     var hasPermissions by remember { mutableStateOf(false) }
     var selectedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var galleryTab by remember { mutableStateOf(MediaGalleryTab.PHOTOS) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
     var showAlbumDialog by remember { mutableStateOf(false) }
     var albumDialogMode by remember { mutableStateOf(AlbumDialogMode.ADD) }
@@ -71,6 +74,15 @@ fun LibraryScreen(
         arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
     } else {
         arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
+    val visibleItems = remember(mediaItems, galleryTab) {
+        mediaItems.filter { item ->
+            when (galleryTab) {
+                MediaGalleryTab.PHOTOS -> !item.isVideo
+                MediaGalleryTab.VIDEOS -> item.isVideo
+            }
+        }
     }
 
     fun reload() {
@@ -86,8 +98,10 @@ fun LibraryScreen(
         reload()
     }
 
+    fun selectedItems(): List<MediaItem> = visibleItems.filter { it.uri.toString() in selectedUris }
+
     fun deleteSelected() {
-        val selected = mediaItems.filter { it.uri.toString() in selectedUris }
+        val selected = selectedItems()
         if (selected.isEmpty()) return
         coroutineScope.launch {
             isBusy = true
@@ -112,8 +126,6 @@ fun LibraryScreen(
             }
         }
     }
-
-    fun selectedItems(): List<MediaItem> = mediaItems.filter { it.uri.toString() in selectedUris }
 
     val existingAlbums = remember(mediaItems) {
         mediaItems.mapNotNull { item ->
@@ -147,19 +159,23 @@ fun LibraryScreen(
         }
     }
 
+    LaunchedEffect(galleryTab) {
+        selectedUris = emptySet()
+    }
+
     Scaffold(
         topBar = {
             if (selectedUris.isEmpty()) {
                 TopAppBar(
-                    title = { Text(stringResource(id = R.string.nav_library)) },
+                    title = { Text(if (galleryTab == MediaGalleryTab.PHOTOS) "Photos" else "Videos") },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
                     actions = {
-                        if (mediaItems.isNotEmpty()) {
-                            IconButton(onClick = { selectedUris = mediaItems.map { it.uri.toString() }.toSet() }) {
+                        if (visibleItems.isNotEmpty()) {
+                            IconButton(onClick = { selectedUris = visibleItems.map { it.uri.toString() }.toSet() }) {
                                 Icon(Icons.Default.SelectAll, contentDescription = "Select all")
                             }
                         }
@@ -174,7 +190,7 @@ fun LibraryScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { selectedUris = mediaItems.map { it.uri.toString() }.toSet() }) {
+                        IconButton(onClick = { selectedUris = visibleItems.map { it.uri.toString() }.toSet() }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select all")
                         }
                     }
@@ -197,7 +213,11 @@ fun LibraryScreen(
                         BulkActionButton(Icons.Default.Edit, "Edit", enabled = selectedUris.size == 1) {
                             selectedItems().firstOrNull()?.let { onNavigateToMediaDetail(it.uri.toString()) }
                         }
-                        BulkActionButton(Icons.Default.Collections, "Merge", enabled = selectedUris.size >= 2 && selectedItems().all { !it.isVideo }) {
+                        BulkActionButton(
+                            Icons.Default.Collections,
+                            "Merge",
+                            enabled = selectedUris.size >= 2 && galleryTab == MediaGalleryTab.PHOTOS
+                        ) {
                             coroutineScope.launch {
                                 isBusy = true
                                 try {
@@ -230,71 +250,92 @@ fun LibraryScreen(
             }
         }
     ) { paddingValues ->
-        Box(Modifier.fillMaxSize().padding(paddingValues)) {
-            when {
-                isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                !hasPermissions -> Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(stringResource(id = R.string.permission_denied_library), color = MaterialTheme.colorScheme.error)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { permissionLauncher.launch(requiredPermissions) }) { Text(stringResource(id = R.string.request_permissions)) }
-                }
-                mediaItems.isEmpty() -> EmptyState(
-                    title = stringResource(id = R.string.state_empty),
-                    description = "Import photos or videos to begin editing.",
-                    modifier = Modifier.align(Alignment.Center)
-                )
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(4.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(mediaItems, key = { it.uri.toString() }) { item ->
-                        val selected = item.uri.toString() in selectedUris
-                        MediaItemThumbnail(
-                            mediaItem = item,
-                            selected = selected,
-                            onClick = {
-                                if (selectedUris.isNotEmpty()) {
-                                    selectedUris = if (selected) selectedUris - item.uri.toString() else selectedUris + item.uri.toString()
-                                } else {
-                                    onNavigateToMediaDetail(item.uri.toString())
-                                }
-                            },
-                            onLongClick = { selectedUris = selectedUris + item.uri.toString() }
-                        )
-                    }
-                }
+        Column(Modifier.fillMaxSize().padding(paddingValues)) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                SegmentedButton(
+                    selected = galleryTab == MediaGalleryTab.PHOTOS,
+                    onClick = { galleryTab = MediaGalleryTab.PHOTOS },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = { if (galleryTab == MediaGalleryTab.PHOTOS) Icon(Icons.Default.CheckCircle, null) }
+                ) { Text("Photos") }
+                SegmentedButton(
+                    selected = galleryTab == MediaGalleryTab.VIDEOS,
+                    onClick = { galleryTab = MediaGalleryTab.VIDEOS },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = { if (galleryTab == MediaGalleryTab.VIDEOS) Icon(Icons.Default.CheckCircle, null) }
+                ) { Text("Videos") }
             }
 
-            if (isBusy) {
-                Surface(
-                    modifier = Modifier.align(Alignment.Center),
-                    color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.72f),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    !hasPermissions -> Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        Text("Working...", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(id = R.string.permission_denied_library), color = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = { permissionLauncher.launch(requiredPermissions) }) {
+                            Text(stringResource(id = R.string.request_permissions))
+                        }
+                    }
+                    visibleItems.isEmpty() -> EmptyState(
+                        title = if (galleryTab == MediaGalleryTab.PHOTOS) "No photos" else "No videos",
+                        description = if (galleryTab == MediaGalleryTab.PHOTOS) "Photos will appear here." else "Videos will appear here.",
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        contentPadding = PaddingValues(4.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(visibleItems, key = { it.uri.toString() }) { item ->
+                            val selected = item.uri.toString() in selectedUris
+                            MediaItemThumbnail(
+                                mediaItem = item,
+                                selected = selected,
+                                onClick = {
+                                    if (selectedUris.isNotEmpty()) {
+                                        selectedUris = if (selected) selectedUris - item.uri.toString() else selectedUris + item.uri.toString()
+                                    } else {
+                                        onNavigateToMediaDetail(item.uri.toString())
+                                    }
+                                },
+                                onLongClick = { selectedUris = selectedUris + item.uri.toString() }
+                            )
+                        }
                     }
                 }
-            }
 
-            statusMessage?.let { message ->
-                LaunchedEffect(message) {
-                    kotlinx.coroutines.delay(2500)
-                    statusMessage = null
+                if (isBusy) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.Center),
+                        color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.72f),
+                        shape = MaterialTheme.shapes.large
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            Text("Working...", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
                 }
-                Snackbar(
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
-                    action = { TextButton(onClick = { statusMessage = null }) { Text("OK") } }
-                ) { Text(message) }
+
+                statusMessage?.let { message ->
+                    LaunchedEffect(message) {
+                        kotlinx.coroutines.delay(2500)
+                        statusMessage = null
+                    }
+                    Snackbar(
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                        action = { TextButton(onClick = { statusMessage = null }) { Text("OK") } }
+                    ) { Text(message) }
+                }
             }
         }
     }
