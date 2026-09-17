@@ -69,30 +69,34 @@ class FaceFocusAnalyzer(
         }
         lastTimestamp = now
 
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
+        try {
+            val image = InputImage.fromMediaImage(
+                mediaImage,
+                imageProxy.imageInfo.rotationDegrees
+            )
 
-        detector.process(image)
-            .addOnSuccessListener { faces ->
-                val target = selectTarget(faces, image.width, image.height)
-                if (target == null) {
-                    lastX = -1f
-                    lastY = -1f
-                    onTargetChanged(null)
-                } else if (lastX < 0f || distance(target.normalizedX, target.normalizedY, lastX, lastY) > 0.025f) {
-                    lastX = target.normalizedX
-                    lastY = target.normalizedY
-                    onTargetChanged(target)
+            detector.process(image)
+                .addOnSuccessListener { faces ->
+                    val target = selectTarget(faces, image.width, image.height)
+                    if (target == null) {
+                        lastX = -1f
+                        lastY = -1f
+                        onTargetChanged(null)
+                    } else if (lastX < 0f || distance(target.normalizedX, target.normalizedY, lastX, lastY) > 0.025f) {
+                        lastX = target.normalizedX
+                        lastY = target.normalizedY
+                        onTargetChanged(target)
+                    }
                 }
-            }
-            .addOnFailureListener {
-                // Keep the camera running even when one analysis frame fails.
-            }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
+                .addOnFailureListener {
+                    // Keep the camera running even when one analysis frame fails.
+                }
+                .addOnCompleteListener {
+                    imageProxy.close()
+                }
+        } catch (_: Throwable) {
+            imageProxy.close()
+        }
     }
 
     private fun selectTarget(faces: List<Face>, width: Int, height: Int): FaceTarget? {
@@ -124,7 +128,9 @@ class FaceFocusAnalyzer(
     }
 
     fun close() {
-        detector.close()
+        try {
+            detector.close()
+        } catch (_: Exception) {}
     }
 }
 
