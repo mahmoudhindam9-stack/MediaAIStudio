@@ -8,6 +8,15 @@ class AIAssistant(
         prompt: String,
         context: AssistantContext
     ): AssistantResult {
-        return planner.createPlan(prompt, context)
+        return when (val result = planner.createPlan(prompt, context)) {
+            is AssistantResult.Planned -> {
+                if (result.plan.requiresConfirmation) {
+                    AssistantResult.NeedsConfirmation(result.plan)
+                } else {
+                    result
+                }
+            }
+            else -> result
+        }
     }
 }
