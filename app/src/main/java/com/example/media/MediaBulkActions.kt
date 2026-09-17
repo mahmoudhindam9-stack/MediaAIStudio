@@ -10,7 +10,6 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import androidx.core.content.FileProvider
 import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.min
@@ -37,9 +36,7 @@ object MediaBulkActions {
         if (items.size < 2 || items.any { it.isVideo }) return null
         val bitmaps = mutableListOf<Bitmap>()
         return try {
-            items.forEach { item ->
-                decodeScaled(context, item.uri, 720)?.let(bitmaps::add)
-            }
+            items.forEach { item -> decodeScaled(context, item.uri, 720)?.let(bitmaps::add) }
             if (bitmaps.size < 2) return null
 
             val columns = 2
@@ -50,41 +47,42 @@ object MediaBulkActions {
             val outputWidth = columns * cellWidth + (columns - 1) * gap
             val outputHeight = rows * cellHeight + (rows - 1) * gap
             val output = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(output)
-            canvas.drawColor(Color.BLACK)
-
-            bitmaps.forEachIndexed { index, bitmap ->
-                val column = index % columns
-                val row = index / columns
-                val scale = min(cellWidth.toFloat() / bitmap.width, cellHeight.toFloat() / bitmap.height)
-                val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
-                val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
-                val left = column * (cellWidth + gap) + (cellWidth - width) / 2
-                val top = row * (cellHeight + gap) + (cellHeight - height) / 2
-                canvas.drawBitmap(bitmap, null, android.graphics.Rect(left, top, left + width, top + height), null)
-            }
-
-            val values = android.content.ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, "Merged_${System.currentTimeMillis()}.jpg")
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MediaAIStudio/Merged/")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
-                }
-            }
-            val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
             try {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    check(output.compress(Bitmap.CompressFormat.JPEG, 94, out))
-                } ?: throw IllegalStateException("Unable to open output stream")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val done = android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
-                    context.contentResolver.update(uri, done, null, null)
+                val canvas = Canvas(output)
+                canvas.drawColor(Color.BLACK)
+                bitmaps.forEachIndexed { index, bitmap ->
+                    val column = index % columns
+                    val row = index / columns
+                    val scale = min(cellWidth.toFloat() / bitmap.width, cellHeight.toFloat() / bitmap.height)
+                    val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                    val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                    val left = column * (cellWidth + gap) + (cellWidth - width) / 2
+                    val top = row * (cellHeight + gap) + (cellHeight - height) / 2
+                    canvas.drawBitmap(bitmap, null, android.graphics.Rect(left, top, left + width, top + height), null)
                 }
-                uri
-            } catch (t: Throwable) {
-                context.contentResolver.delete(uri, null, null)
-                throw t
+
+                val values = android.content.ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "Merged_${System.currentTimeMillis()}.jpg")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MediaAIStudio/Merged/")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                }
+                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        check(output.compress(Bitmap.CompressFormat.JPEG, 94, out))
+                    } ?: throw IllegalStateException("Unable to open output stream")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val done = android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                        context.contentResolver.update(uri, done, null, null)
+                    }
+                    uri
+                } catch (t: Throwable) {
+                    context.contentResolver.delete(uri, null, null)
+                    throw t
+                }
             } finally {
                 output.recycle()
             }
@@ -108,15 +106,19 @@ object MediaBulkActions {
     }
 
     private fun decodeLegacy(context: Context, uri: Uri, maxSize: Int): Bitmap? {
-        var stream: InputStream? = null
+        var width = 0
+        var height = 0
+        var stream: InputStream? = context.contentResolver.openInputStream(uri)
         try {
-            stream = context.contentResolver.openInputStream(uri) ?: return null
+            if (stream == null) return null
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeStream(stream, null, opts)
+            width = opts.outWidth
+            height = opts.outHeight
         } finally {
             stream?.close()
         }
-        val maxDimension = max(optsWidth, optsHeight)
+        val maxDimension = max(width, height).coerceAtLeast(1)
         val sample = max(1, maxDimension / maxSize)
         stream = context.contentResolver.openInputStream(uri) ?: return null
         return try {
@@ -128,7 +130,4 @@ object MediaBulkActions {
             stream.close()
         }
     }
-
-    private var optsWidth: Int = 0
-    private var optsHeight: Int = 0
 }
