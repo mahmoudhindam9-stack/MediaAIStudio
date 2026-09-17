@@ -29,15 +29,14 @@ class AppModelManager(context: Context) : ModelManager {
             runtime: String?
         ): ModelInfo {
             val artifact = artifacts.artifact(id)
-            val stateHolder = artifacts.getArtifactState(id)
-
-            // Do not perform ONNX/TFLite graph validation from the Compose/UI thread.
-            // Models live under filesDir/models and therefore survive normal APK updates.
-            // Final validation remains in ensureModel()/downloadModel() on a worker dispatcher.
-            val lightweightReady = artifact?.let {
+            // Read the reactive download state only. Never run ONNX/TFLite graph validation
+            // while Compose is rendering, because large models can block or crash the UI.
+            val stateHolder = artifacts.states.value[id] ?: ArtifactState()
+            val lightweightFileSize = artifact?.let {
                 val file = artifacts.localFile(it)
-                file.isFile && file.length() >= it.minimumBytes
-            } == true
+                if (file.isFile) file.length() else 0L
+            } ?: 0L
+            val lightweightReady = artifact?.let { lightweightFileSize >= it.minimumBytes } == true
             val effectiveState = when {
                 stateHolder.state != ModelInstallState.NOT_INSTALLED -> stateHolder.state
                 lightweightReady -> ModelInstallState.READY
@@ -52,7 +51,7 @@ class AppModelManager(context: Context) : ModelManager {
                 status = effectiveState,
                 progress = if (effectiveState == ModelInstallState.READY) 100 else stateHolder.progress,
                 errorMessage = stateHolder.errorMessage,
-                currentBytes = if (lightweightReady) artifacts.localFile(requireNotNull(artifact)).length() else stateHolder.currentBytes,
+                currentBytes = if (lightweightReady) lightweightFileSize else stateHolder.currentBytes,
                 expectedBytes = stateHolder.expectedBytes ?: defaultSizeBytes,
                 checksumValid = if (effectiveState == ModelInstallState.READY && sha256 != null) true else stateHolder.checksumValid,
                 version = version,
@@ -127,8 +126,8 @@ class AppModelManager(context: Context) : ModelManager {
         fun present(id: String): Boolean {
             val artifact = artifacts.artifact(id) ?: return false
             val file = artifacts.localFile(artifact)
-            // Capability UI must remain non-blocking. Actual structural validation happens
-            // when the engine calls ensureModel() from a background coroutine.
+            // Capability UI remains non-blocking. Full structural/checksum validation happens
+            // in ensureModel() on a background dispatcher immediately before inference.
             return file.isFile && file.length() >= artifact.minimumBytes
         }
 
