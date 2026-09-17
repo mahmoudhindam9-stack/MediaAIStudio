@@ -24,12 +24,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,7 +42,6 @@ fun MediaDetailScreen(
     val mediaRepository = remember { MediaStoreRepository(context) }
     var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var currentUriString by remember(uriString) { mutableStateOf(uriString) }
-    var showMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         mediaRepository.getAllMedia().collect { mediaItems = it }
@@ -99,7 +97,7 @@ fun MediaDetailScreen(
                     }) {
                         Icon(Icons.Default.Edit, contentDescription = "Edit")
                     }
-                    IconButton(onClick = { showMenu = !showMenu }) {
+                    IconButton(onClick = { /* Future: Delete */ }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete")
                     }
                 }
@@ -176,7 +174,7 @@ fun VideoPlayer(uri: Uri) {
     val context = LocalContext.current
     val exoPlayer = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
+            setMediaItem(ExoMediaItem.fromUri(uri))
             prepare()
             playWhenReady = true
         }
