@@ -72,6 +72,25 @@ fun VideoEditorScreen(
     val promptText = remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
     
+    val mediaPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+        onResult = { uris ->
+            if (uris.isNotEmpty()) {
+                uris.forEach { uri ->
+                    try {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                viewModel.addMedia(uris.map { it.toString() }, context.contentResolver)
+            }
+        }
+    )
+
     LaunchedEffect(Unit) {
         viewModel.aiMessages.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -203,6 +222,9 @@ fun VideoEditorScreen(
             EditorToolbar(
                 viewModel = viewModel, 
                 state = state, 
+                onAddMediaClick = {
+                    mediaPickerLauncher.launch(arrayOf("video/*", "image/*"))
+                },
                 onAiClick = { showAiDialog.value = true },
                  onRecordVoiceOver = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -294,7 +316,7 @@ fun formatTime(ms: Long): String {
 }
 
 @Composable
-fun EditorToolbar(viewModel: VideoEditorViewModel, state: VideoEditorState, onRecordVoiceOver: () -> Unit, onAiClick: () -> Unit) {
+fun EditorToolbar(viewModel: VideoEditorViewModel, state: VideoEditorState, onAddMediaClick: () -> Unit, onRecordVoiceOver: () -> Unit, onAiClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -302,7 +324,7 @@ fun EditorToolbar(viewModel: VideoEditorViewModel, state: VideoEditorState, onRe
             .padding(8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        IconButton(onClick = { /* Add Media */ }) {
+        IconButton(onClick = onAddMediaClick) {
             Icon(Icons.Default.Add, contentDescription = "Add", tint = MaterialTheme.colorScheme.onBackground)
         }
         IconButton(onClick = { viewModel.splitSelectedClip() }) {

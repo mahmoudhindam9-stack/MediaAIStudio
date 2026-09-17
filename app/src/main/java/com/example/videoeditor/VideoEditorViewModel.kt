@@ -52,6 +52,79 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
     
+    fun addMedia(uris: List<String>, contentResolver: android.content.ContentResolver) {
+        viewModelScope.launch {
+            val newClips = mutableListOf<VideoClip>()
+            for (uriString in uris) {
+                var duration = 10000L
+                var rotation = 0f
+                try {
+                    val retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(getApplication(), Uri.parse(uriString))
+                    val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    duration = time?.toLongOrNull() ?: 10000L
+                    rotation = rot?.toFloatOrNull() ?: 0f
+                    retriever.release()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                
+                newClips.add(VideoClip(
+                    uri = uriString,
+                    originalDurationMs = duration,
+                    durationMs = duration,
+                    rotation = rotation
+                ))
+            }
+
+            val s = _state.value
+            val combinedClips = s.videoClips + newClips
+            val (recalculatedClips, totalDuration) = recalculateTimeline(combinedClips)
+            
+            updateState(s.copy(
+                videoClips = recalculatedClips,
+                durationMs = totalDuration,
+                selectedItemId = newClips.firstOrNull()?.id ?: s.selectedItemId
+            ))
+            commitState()
+            updatePlayerMedia()
+        }
+    }
+    
+    private fun recalculateTimeline(clips: List<VideoClip>): Pair<List<VideoClip>, Long> {
+        var currentTime = 0L
+        val recalculated = clips.map { clip ->
+            val newClip = clip.copy(startTimeMs = currentTime)
+            currentTime += newClip.durationMs
+            newClip
+        }
+        return Pair(recalculated, currentTime)
+    }
+
+    fun validateTimelineState(): List<String> {
+        val s = _state.value
+        val errors = mutableListOf<String>()
+        val ids = mutableSetOf<String>()
+        var expectedStart = 0L
+        for (clip in s.videoClips) {
+            if (!ids.add(clip.id)) errors.add("Duplicate clip ID: ${clip.id}")
+            if (clip.startTrimMs < 0) errors.add("Negative startTrimMs on clip ${clip.id}")
+            if (clip.durationMs < 0) errors.add("Negative durationMs on clip ${clip.id}")
+            if (clip.startTrimMs + clip.durationMs > clip.originalDurationMs) errors.add("Invalid trim range on clip ${clip.id}")
+            if (clip.startTimeMs != expectedStart) errors.add("Invalid timeline ordering for clip ${clip.id}. Expected $expectedStart, got ${clip.startTimeMs}")
+            expectedStart += clip.durationMs
+        }
+        if (s.playheadMs < 0 || s.playheadMs > s.durationMs) errors.add("Playhead outside duration")
+        if (s.selectedItemId != null && s.videoClips.none { it.id == s.selectedItemId } && s.audioTracks.none { it.id == s.selectedItemId }) {
+            errors.add("Invalid selectedItemId")
+        }
+        for (audio in s.audioTracks) {
+            if (audio.startTimeMs < 0) errors.add("Negative start time on audio ${audio.id}")
+        }
+        return errors
+    }
+
     fun loadInitialMedia(uriString: String) {
         if (_state.value.videoClips.isNotEmpty()) return // Already loaded
         
@@ -159,21 +232,35 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         
         val newVideoClips = s.videoClips.map {
             if (it.id == id) {
+                // Ensure valid trim range
+                val newStart = startOffset.coerceAtLeast(0L)
+                val newDuration = (endOffset - startOffset).coerceAtLeast(100L).coerceAtMost(it.originalDurationMs - newStart)
                 it.copy(
-                    startTrimMs = startOffset,
-                    durationMs = endOffset - startOffset
+                    startTrimMs = newStart,
+                    durationMs = newDuration
                 )
             } else it
         }
         val newAudioClips = s.audioTracks.map {
             if (it.id == id) {
+                val newStart = startOffset.coerceAtLeast(0L)
+                val newDuration = (endOffset - startOffset).coerceAtLeast(100L).coerceAtMost(it.originalDurationMs - newStart)
                 it.copy(
-                    startTrimMs = startOffset,
-                    durationMs = endOffset - startOffset
+                    startTrimMs = newStart,
+                    durationMs = newDuration
                 )
             } else it
         }
-        updateState(s.copy(videoClips = newVideoClips, audioTracks = newAudioClips))
+        
+        val (recalculatedClips, totalDuration) = recalculateTimeline(newVideoClips)
+        val newPlayhead = s.playheadMs.coerceIn(0L, totalDuration)
+        
+        updateState(s.copy(
+            videoClips = recalculatedClips,
+            audioTracks = newAudioClips,
+            durationMs = totalDuration,
+            playheadMs = newPlayhead
+        ))
         commitState()
         updatePlayerMedia()
     }
@@ -181,9 +268,28 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     fun deleteSelectedClip() {
         val s = _state.value
         val id = s.selectedItemId ?: return
+        
+        val videoIndex = s.videoClips.indexOfFirst { it.id == id }
         val newVideoClips = s.videoClips.filter { it.id != id }
         val newAudioClips = s.audioTracks.filter { it.id != id }
-        updateState(s.copy(videoClips = newVideoClips, audioTracks = newAudioClips, selectedItemId = null))
+        
+        val (recalculatedClips, totalDuration) = recalculateTimeline(newVideoClips)
+        
+        // Select neighboring clip when possible
+        val nextSelection = if (recalculatedClips.isNotEmpty() && videoIndex != -1) {
+            recalculatedClips[videoIndex.coerceAtMost(recalculatedClips.size - 1)].id
+        } else {
+            null
+        }
+        val newPlayhead = s.playheadMs.coerceIn(0L, totalDuration)
+
+        updateState(s.copy(
+            videoClips = recalculatedClips,
+            audioTracks = newAudioClips,
+            selectedItemId = nextSelection,
+            durationMs = totalDuration,
+            playheadMs = newPlayhead
+        ))
         commitState()
         updatePlayerMedia()
     }
@@ -204,7 +310,6 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
                 )
                 val clip2 = clip.copy(
                     id = UUID.randomUUID().toString(),
-                    startTimeMs = playhead,
                     startTrimMs = clip.startTrimMs + cutOffset,
                     durationMs = clip.durationMs - cutOffset
                 )
@@ -212,7 +317,14 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
                     set(videoIndex, clip1)
                     add(videoIndex + 1, clip2)
                 }
-                updateState(s.copy(videoClips = newClips))
+                
+                val (recalculatedClips, totalDuration) = recalculateTimeline(newClips)
+                
+                updateState(s.copy(
+                    videoClips = recalculatedClips,
+                    durationMs = totalDuration,
+                    selectedItemId = clip2.id // Select the new clip
+                ))
                 commitState()
                 updatePlayerMedia()
             }
@@ -298,23 +410,50 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     fun applySmartCuts() {
         val s = _state.value
         val cuts = s.aiSuggestedCuts ?: return
-        // Simplify: Just remove the start and end according to cuts
-        // In a real editor, this would slice the timeline. For this demo, we trim the first clip.
-        val clip = s.videoClips.firstOrNull() ?: return
         
-        var newStart = clip.startTrimMs
-        var newDuration = clip.durationMs
-        cuts.forEach { cut ->
-            if (cut.startTimeMs == 0L) {
-                newStart = cut.endTimeMs
-                newDuration -= cut.endTimeMs
-            } else if (cut.endTimeMs >= clip.originalDurationMs - 1000L) {
-                newDuration -= (cut.endTimeMs - cut.startTimeMs)
+        val targetClip = s.videoClips.firstOrNull { it.id == s.selectedItemId } 
+            ?: s.videoClips.firstOrNull() 
+            ?: return
+
+        val keepIntervals = mutableListOf<Pair<Long, Long>>()
+        var currentStart = targetClip.startTrimMs
+        val targetEnd = targetClip.startTrimMs + targetClip.durationMs
+        
+        val sortedCuts = cuts.sortedBy { it.startTimeMs }
+        for (cut in sortedCuts) {
+            val cutStart = cut.startTimeMs.coerceIn(currentStart, targetEnd)
+            val cutEnd = cut.endTimeMs.coerceIn(currentStart, targetEnd)
+            if (cutStart > currentStart) {
+                keepIntervals.add(Pair(currentStart, cutStart))
             }
+            currentStart = maxOf(currentStart, cutEnd)
+        }
+        if (currentStart < targetEnd) {
+            keepIntervals.add(Pair(currentStart, targetEnd))
+        }
+
+        val newClips = keepIntervals.map { (start, end) ->
+            targetClip.copy(
+                id = UUID.randomUUID().toString(),
+                startTrimMs = start,
+                durationMs = end - start
+            )
+        }
+
+        val targetIndex = s.videoClips.indexOf(targetClip)
+        val combinedClips = s.videoClips.toMutableList().apply {
+            removeAt(targetIndex)
+            addAll(targetIndex, newClips)
         }
         
-        val newClip = clip.copy(startTrimMs = newStart, durationMs = newDuration)
-        updateState(s.copy(videoClips = listOf(newClip), aiSuggestedCuts = null))
+        val (recalculatedClips, totalDuration) = recalculateTimeline(combinedClips)
+
+        updateState(s.copy(
+            videoClips = recalculatedClips,
+            durationMs = totalDuration,
+            aiSuggestedCuts = null,
+            selectedItemId = newClips.firstOrNull()?.id ?: s.selectedItemId
+        ))
         commitState()
         updatePlayerMedia()
     }
