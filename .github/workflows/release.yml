@@ -84,8 +84,9 @@ jobs:
           test -n "$apk"
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; uploading the rebuilt APK to it."
+            echo "Release $tag already exists; uploading the rebuilt APK to it and keeping it as the latest normal release."
             gh release upload "$tag" "$apk" --clobber
+            gh release edit "$tag" --prerelease=false
             exit 0
           fi
 
@@ -98,12 +99,12 @@ jobs:
 
           if [ "$SIGNED" = "true" ]; then
             title="MediaAIStudio $VERSION_NAME"
-            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\n\nDedicated on-device AI camera mode added. AI capture applies the existing CPGA low-light enhancement and Real-ESRGAN 2x pipeline."
+            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\\n\\nProduction-signed release.\\n\\nCamera: dedicated on-device AI mode using the existing CPGA low-light and Real-ESRGAN 2x pipeline."
             gh release create "$tag" "$apk" --title "$title" --notes "$notes"
           else
             title="MediaAIStudio $VERSION_NAME — Development Build"
-            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\n\nDevelopment release: production signing credentials are not configured in GitHub Actions, so this APK is debug-signed and is not intended to replace an existing production-signed installation.\n\nCamera: dedicated on-device AI mode using the existing CPGA low-light and Real-ESRGAN 2x pipeline."
-            gh release create "$tag" "$apk" --prerelease --title "$title" --notes "$notes"
+            notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\\n\\nDevelopment build published as the current GitHub release. Production signing credentials are not configured in GitHub Actions, so this APK is debug-signed. It is not a production-signed replacement for an installation signed with a different certificate.\\n\\nCamera: dedicated on-device AI mode using the existing CPGA low-light and Real-ESRGAN 2x pipeline."
+            gh release create "$tag" "$apk" --title "$title" --notes "$notes"
           fi
 
       - name: Upload build log
