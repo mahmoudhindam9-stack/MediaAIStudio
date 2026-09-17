@@ -51,6 +51,9 @@ jobs:
           path: compile.log
           if-no-files-found: error
 
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
       - name: Lint debug
         run: gradle lintDebug --stacktrace
 
