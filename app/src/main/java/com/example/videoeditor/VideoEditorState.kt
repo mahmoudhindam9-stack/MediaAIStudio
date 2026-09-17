@@ -19,7 +19,8 @@ data class VideoEditorState(
     val aiSubtitleTrack: SubtitleTrack? = null,
     val aiTrackingData: List<TrackingKeyframe>? = null,
     val aiSuggestedCuts: List<SuggestedCut>? = null,
-    val aiReframeKeyframes: List<ReframeKeyframe>? = null
+    val aiReframeKeyframes: List<ReframeKeyframe>? = null,
+    val isExporting: Boolean = false
 )
 
 /**

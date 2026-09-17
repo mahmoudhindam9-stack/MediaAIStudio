@@ -60,6 +60,19 @@ class VideoExport(private val context: Context) {
         onError: (Exception) -> Unit
     ) {
         val temporaryFiles = mutableListOf<File>()
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var progressRunnable: Runnable? = null
+        var isTerminal = false
+
+        fun terminateAndCleanup(action: () -> Unit) {
+            if (isTerminal) return
+            isTerminal = true
+            progressRunnable?.let { handler.removeCallbacks(it) }
+            progressRunnable = null
+            cleanup(temporaryFiles)
+            action()
+        }
+
         try {
             require(state.durationMs > 0L) { "Cannot export an empty timeline" }
             val renderPlan = state.toVideoRenderPlan()
@@ -100,12 +113,6 @@ class VideoExport(private val context: Context) {
             }
 
             val sequences = mutableListOf(EditedMediaItemSequence(videoItems))
-            val silenceLibrary = if (state.audioTracks.any { it.startTimeMs > 0L && !it.isMuted }) {
-                createSilenceLibrary().also { temporaryFiles += it.allFiles }
-            } else {
-                null
-            }
-
             state.audioTracks.forEach { track ->
                 if (track.isMuted || track.durationMs <= 0L) return@forEach
                 val startAt = track.startTimeMs.coerceAtLeast(0L)
@@ -115,8 +122,9 @@ class VideoExport(private val context: Context) {
 
                 val items = mutableListOf<EditedMediaItem>()
                 if (startAt > 0L) {
-                    requireNotNull(silenceLibrary) { "Silence library was not created" }
-                    appendSilence(items, startAt, silenceLibrary)
+                    val silenceFile = createSilenceFile(context.cacheDir, startAt)
+                    temporaryFiles += silenceFile
+                    items += EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(silenceFile))).build()
                 }
 
                 val sourceStart = track.startTrimMs.coerceIn(0L, track.originalDurationMs)
@@ -163,12 +171,12 @@ class VideoExport(private val context: Context) {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         try {
                             val publishedUri = publishToMediaStore(outputFile)
-                            cleanup(temporaryFiles)
-                            onProgress(100)
-                            onSuccess(publishedUri)
+                            terminateAndCleanup {
+                                onProgress(100)
+                                onSuccess(publishedUri)
+                            }
                         } catch (e: Exception) {
-                            cleanup(temporaryFiles)
-                            onError(e)
+                            terminateAndCleanup { onError(e) }
                         }
                     }
 
@@ -177,31 +185,30 @@ class VideoExport(private val context: Context) {
                         exportResult: ExportResult,
                         exportException: ExportException
                     ) {
-                        cleanup(temporaryFiles)
-                        onError(exportException)
+                        terminateAndCleanup { onError(exportException) }
                     }
                 })
                 .build()
 
             transformer.start(composition, outputFile.absolutePath)
-            pollProgress(transformer, onProgress)
-        } catch (e: Exception) {
-            cleanup(temporaryFiles)
-            onError(e)
-        }
-    }
-
-    private fun pollProgress(transformer: Transformer, onProgress: (Int) -> Unit) {
-        val handler = android.os.Handler(transformer.applicationLooper)
-        val holder = ProgressHolder()
-        val runnable = object : Runnable {
-            override fun run() {
-                val state = runCatching { transformer.getProgress(holder) }.getOrNull()
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) onProgress(holder.progress)
-                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) handler.postDelayed(this, 250L)
+            
+            val holder = ProgressHolder()
+            progressRunnable = object : Runnable {
+                override fun run() {
+                    if (isTerminal) return
+                    val stateCode = runCatching { transformer.getProgress(holder) }.getOrNull()
+                    if (stateCode == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress(holder.progress)
+                    }
+                    if (stateCode != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                        handler.postDelayed(this, 250L)
+                    }
+                }
             }
+            handler.post(progressRunnable!!)
+        } catch (e: Exception) {
+            terminateAndCleanup { onError(e) }
         }
-        handler.post(runnable)
     }
 
     private fun validateRenderPlan(plan: List<VideoRenderItem>, projectDurationMs: Long) {
@@ -275,43 +282,10 @@ class VideoExport(private val context: Context) {
             }
     }
 
-    private data class SilenceLibrary(
-        val tenSecond: File,
-        val oneSecond: File,
-        val hundredMs: File,
-        val tenMs: File
-    ) {
-        val allFiles: List<File> get() = listOf(tenSecond, oneSecond, hundredMs, tenMs)
-    }
-
-    private fun createSilenceLibrary(): SilenceLibrary {
-        val dir = context.cacheDir
-        return SilenceLibrary(
-            tenSecond = createSilenceFile(dir, 10_000L),
-            oneSecond = createSilenceFile(dir, 1_000L),
-            hundredMs = createSilenceFile(dir, 100L),
-            tenMs = createSilenceFile(dir, 10L)
-        )
-    }
-
     private fun createSilenceFile(directory: File, durationMs: Long): File {
         val file = File.createTempFile("mediaai_silence_", ".wav", directory)
         writeSilenceWav(file, durationMs)
         return file
-    }
-
-    private fun appendSilence(items: MutableList<EditedMediaItem>, durationMs: Long, library: SilenceLibrary) {
-        var remaining = durationMs
-        fun add(file: File, duration: Long) {
-            while (remaining >= duration) {
-                items += EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(file))).build()
-                remaining -= duration
-            }
-        }
-        add(library.tenSecond, 10_000L)
-        add(library.oneSecond, 1_000L)
-        add(library.hundredMs, 100L)
-        add(library.tenMs, 10L)
     }
 
     private fun writeSilenceWav(file: File, durationMs: Long) {

@@ -281,14 +281,19 @@ fun VideoEditorScreen(
                     IconButton(onClick = { viewModel.redo() }) {
                         Icon(Icons.AutoMirrored.Filled.Redo, "Redo", tint = MaterialTheme.colorScheme.onBackground)
                     }
-                    TextButton(onClick = {
-                        com.example.videoeditor.export.VideoExport(context).export(
-                            state = state,
-                            onProgress = { },
-                            onSuccess = { uri -> onExported(uri.toString()) },
-                            onError = { error -> coroutineScope.launch { snackbarHostState.showSnackbar(error.message ?: error.toString()) } }
-                        )
-                    }) { Text("Export", color = MaterialTheme.colorScheme.secondary) }
+                    TextButton(
+                        enabled = !state.isExporting && state.videoClips.isNotEmpty(),
+                        onClick = {
+                            viewModel.exportProject(context) { uri ->
+                                onExported(uri.toString())
+                            }
+                        }
+                    ) { 
+                        Text(
+                            if (state.isExporting) "Exporting..." else "Export", 
+                            color = if (state.isExporting) Color.Gray else MaterialTheme.colorScheme.secondary
+                        ) 
+                    }
                 }
             )
         },

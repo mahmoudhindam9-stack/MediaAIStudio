@@ -56,7 +56,7 @@ class FadeGainAudioProcessor(
     private var processedFrames: Long = 0L
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT && inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
         if (inputAudioFormat.sampleRate <= 0 || inputAudioFormat.channelCount <= 0) {
@@ -74,6 +74,8 @@ class FadeGainAudioProcessor(
         val frames = inputBytes / bytesPerFrame
         val output = replaceOutputBuffer(inputBytes).order(ByteOrder.nativeOrder())
         val source = inputBuffer.order(ByteOrder.nativeOrder())
+        val isFloat = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
+        
         repeat(frames) { frameIndex ->
             val absoluteFrame = processedFrames + frameIndex
             val positionMs = (absoluteFrame * 1_000L) / inputAudioFormat.sampleRate.toLong()
@@ -85,9 +87,14 @@ class FadeGainAudioProcessor(
                 fadeOutDurationMs = fadeOutDurationMs
             )
             repeat(inputAudioFormat.channelCount) {
-                val sample = source.short.toInt()
-                val scaled = (sample * gain).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                output.putShort(scaled.toShort())
+                if (isFloat) {
+                    val sample = source.float
+                    output.putFloat(sample * gain)
+                } else {
+                    val sample = source.short.toInt()
+                    val scaled = (sample * gain).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    output.putShort(scaled.toShort())
+                }
             }
         }
         processedFrames += frames.toLong()

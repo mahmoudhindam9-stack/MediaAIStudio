@@ -314,6 +314,28 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         _state.update { it.copy(playheadMs = global) }
     }
 
+    fun exportProject(context: android.content.Context, onSuccess: (Uri) -> Unit) {
+        val s = _state.value
+        if (s.isExporting || s.videoClips.isEmpty()) return
+        updateState(s.copy(isExporting = true))
+        
+        val exporter = com.example.videoeditor.export.VideoExport(context.applicationContext)
+        exporter.export(
+            state = s,
+            onProgress = { /* Progress could be added to state if needed */ },
+            onSuccess = { uri ->
+                updateState(_state.value.copy(isExporting = false))
+                onSuccess(uri)
+            },
+            onError = { error ->
+                updateState(_state.value.copy(isExporting = false))
+                viewModelScope.launch {
+                    _aiMessages.emit("Export failed: ${error.message ?: error.toString()}")
+                }
+            }
+        )
+    }
+
     private fun seekPlayerToGlobal(positionMs: Long) {
         val s = _state.value
         if (s.videoClips.isEmpty()) return
