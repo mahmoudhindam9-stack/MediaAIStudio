@@ -6,12 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
@@ -47,7 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +65,7 @@ import com.example.ai.generative.GenerativeType
 import com.example.videoeditor.VideoEditorState
 import com.example.videoeditor.VideoEditorViewModel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlin.math.max
 
 @Composable
@@ -78,13 +78,14 @@ fun VideoEditorScreen(
     val viewModel: VideoEditorViewModel = viewModel()
     val state by viewModel.state.collectAsState()
 
-    var showAiDialog by rememberSaveable { mutableStateOf(false) }
-    var showTrimDialog by rememberSaveable { mutableStateOf(false) }
-    var showVolumeDialog by rememberSaveable { mutableStateOf(false) }
-    var showConsentType by rememberSaveable { mutableStateOf<String?>(null) }
-    var showPromptType by rememberSaveable { mutableStateOf<String?>(null) }
-    var promptText by rememberSaveable { mutableStateOf("") }
+    var showAiDialog by remember { mutableStateOf(false) }
+    var showTrimDialog by remember { mutableStateOf(false) }
+    var showVolumeDialog by remember { mutableStateOf(false) }
+    var showConsentType by remember { mutableStateOf<String?>(null) }
+    var showPromptType by remember { mutableStateOf<String?>(null) }
+    var promptText by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
@@ -138,8 +139,10 @@ fun VideoEditorScreen(
     val selectedAudio = state.audioTracks.firstOrNull { it.id == state.selectedItemId }
 
     if (showTrimDialog && selectedVideo != null) {
-        var start by rememberSaveable(selectedVideo.id) { mutableFloatStateOf(selectedVideo.startTrimMs.toFloat()) }
-        var end by rememberSaveable(selectedVideo.id) { mutableFloatStateOf((selectedVideo.startTrimMs + selectedVideo.durationMs).toFloat()) }
+        var start by remember(selectedVideo.id) { mutableFloatStateOf(selectedVideo.startTrimMs.toFloat()) }
+        var end by remember(selectedVideo.id) {
+            mutableFloatStateOf((selectedVideo.startTrimMs + selectedVideo.durationMs).toFloat())
+        }
         val maxDuration = max(100f, selectedVideo.originalDurationMs.toFloat())
         val valid = end > start && end - start >= 100f
 
@@ -177,7 +180,7 @@ fun VideoEditorScreen(
 
     if (showVolumeDialog && (selectedVideo != null || selectedAudio != null)) {
         val selectedVolume = selectedVideo?.volume ?: selectedAudio?.volume ?: 1f
-        var volume by rememberSaveable(state.selectedItemId) { mutableFloatStateOf(selectedVolume) }
+        var volume by remember(state.selectedItemId) { mutableFloatStateOf(selectedVolume) }
         AlertDialog(
             onDismissRequest = { showVolumeDialog = false },
             title = { Text("Volume") },
@@ -234,29 +237,28 @@ fun VideoEditorScreen(
         )
     }
 
-    if (showPromptType != null) {
-        val type = runCatching { GenerativeType.valueOf(showPromptType!!) }.getOrNull()
-        if (type != null) {
-            AlertDialog(
-                onDismissRequest = { showPromptType = null },
-                title = { Text(type.name) },
-                text = {
-                    OutlinedTextField(
-                        value = promptText,
-                        onValueChange = { promptText = it },
-                        label = { Text("Prompt") }
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.runGenerativeVideo(type, promptText)
-                        promptText = ""
-                        showPromptType = null
-                    }) { Text("Generate") }
-                },
-                dismissButton = { TextButton(onClick = { showPromptType = null }) { Text("Cancel") } }
-            )
-        }
+    val promptTypeKey = showPromptType
+    val promptType = promptTypeKey?.let { runCatching { GenerativeType.valueOf(it) }.getOrNull() }
+    if (promptType != null) {
+        AlertDialog(
+            onDismissRequest = { showPromptType = null },
+            title = { Text(promptType.name) },
+            text = {
+                OutlinedTextField(
+                    value = promptText,
+                    onValueChange = { promptText = it },
+                    label = { Text("Prompt") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.runGenerativeVideo(promptType, promptText)
+                    promptText = ""
+                    showPromptType = null
+                }) { Text("Generate") }
+            },
+            dismissButton = { TextButton(onClick = { showPromptType = null }) { Text("Cancel") } }
+        )
     }
 
     if (state.aiSuggestedCuts != null) {
@@ -289,7 +291,7 @@ fun VideoEditorScreen(
                             outputFilePath = outPath,
                             onProgress = {},
                             onSuccess = { onExported(outPath) },
-                            onError = { snackbarHostState.currentSnackbarData?.dismiss(); viewModel.run { } }
+                            onError = { error -> coroutineScope.launch { snackbarHostState.showSnackbar(error) } }
                         )
                     }) { Text("Export", color = MaterialTheme.colorScheme.secondary) }
                 }
@@ -413,7 +415,7 @@ fun EditorToolbar(
         }
         IconButton(enabled = selectedTimelineItem != null, onClick = onVolumeClick) {
             Icon(
-                if (selectedTimelineItem?.isMuted == true) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                Icons.Default.VolumeUp,
                 contentDescription = "Volume",
                 tint = if (selectedTimelineItem != null) MaterialTheme.colorScheme.onBackground else Color.Gray
             )
@@ -426,16 +428,16 @@ fun EditorToolbar(
             )
         }
         IconButton(enabled = selectedIsVideo, onClick = { viewModel.moveSelectedClipLeft() }) {
-            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Move left", tint = if (selectedIsVideo) Color.White else Color.Gray)
+            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Move left", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
         }
         IconButton(enabled = selectedIsVideo, onClick = { viewModel.moveSelectedClipRight() }) {
-            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Move right", tint = if (selectedIsVideo) Color.White else Color.Gray)
+            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Move right", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
         }
         IconButton(enabled = selectedIsVideo, onClick = { viewModel.splitSelectedClip() }) {
-            Icon(Icons.Default.ContentCut, contentDescription = "Split", tint = if (selectedIsVideo) Color.White else Color.Gray)
+            Icon(Icons.Default.ContentCut, contentDescription = "Split", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
         }
         IconButton(enabled = selectedTimelineItem != null, onClick = { viewModel.deleteSelectedClip() }) {
-            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = if (selectedTimelineItem != null) Color.White else Color.Gray)
+            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = if (selectedTimelineItem != null) MaterialTheme.colorScheme.onBackground else Color.Gray)
         }
         IconButton(onClick = onAiClick) {
             Icon(Icons.Default.AutoAwesome, contentDescription = "AI Tools", tint = MaterialTheme.colorScheme.secondary)
@@ -444,7 +446,7 @@ fun EditorToolbar(
             Icon(
                 if (viewModel.isRecordingVoiceOver) Icons.Default.Stop else Icons.Default.Mic,
                 contentDescription = "Voice Over",
-                tint = if (viewModel.isRecordingVoiceOver) MaterialTheme.colorScheme.error else Color.White
+                tint = if (viewModel.isRecordingVoiceOver) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground
             )
         }
     }
@@ -491,9 +493,7 @@ fun TimelineView(
                                 if (state.selectedItemId == clip.id) MaterialTheme.colorScheme.secondary
                                 else MaterialTheme.colorScheme.primary
                             )
-                            .clickable {
-                                onItemSelect(clip.id)
-                            }
+                            .clickable { onItemSelect(clip.id) }
                             .padding(2.dp)
                     ) {
                         Text(
