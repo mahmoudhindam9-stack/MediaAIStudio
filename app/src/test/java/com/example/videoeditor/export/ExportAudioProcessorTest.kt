@@ -7,44 +7,35 @@ import org.junit.Test
 class ExportAudioProcessorTest {
     @Test
     fun fullVolumeWithoutFades_staysAtUnity() {
-        assertEquals(
-            1f,
-            AudioAutomation.gainAt(500L, 2_000L, 1f, 0L, 0L),
-            0.0001f
-        )
+        assertEquals(1f, AudioAutomation.gainAt(500L, 2_000L, 1f, 0L, 0L), 0.0001f)
     }
 
     @Test
     fun volumeIsApplied() {
-        assertEquals(
-            0.35f,
-            AudioAutomation.gainAt(500L, 2_000L, 0.35f, 0L, 0L),
-            0.0001f
-        )
+        assertEquals(0.35f, AudioAutomation.gainAt(500L, 2_000L, 0.35f, 0L, 0L), 0.0001f)
     }
 
     @Test
     fun mutedTrackProducesZeroGain() {
-        assertEquals(
-            0f,
-            AudioAutomation.gainAt(500L, 2_000L, 0f, 0L, 0L),
-            0.0001f
-        )
+        assertEquals(0f, AudioAutomation.gainAt(500L, 2_000L, 0f, 0L, 0L), 0.0001f)
     }
 
     @Test
-    fun fadeInStartsAtZero() {
+    fun fadeInRampsLinearly() {
         assertEquals(0f, AudioAutomation.gainAt(0L, 2_000L, 1f, 1_000L, 0L), 0.0001f)
+        assertEquals(0.5f, AudioAutomation.gainAt(500L, 2_000L, 1f, 1_000L, 0L), 0.0001f)
+        assertEquals(1f, AudioAutomation.gainAt(1_000L, 2_000L, 1f, 1_000L, 0L), 0.0001f)
     }
 
     @Test
-    fun fadeOutEndsAtZero() {
+    fun fadeOutRampsToZero() {
+        assertEquals(1f, AudioAutomation.gainAt(1_000L, 2_000L, 1f, 0L, 1_000L), 0.0001f)
+        assertEquals(0.5f, AudioAutomation.gainAt(1_500L, 2_000L, 1f, 0L, 1_000L), 0.0001f)
         assertEquals(0f, AudioAutomation.gainAt(2_000L, 2_000L, 1f, 0L, 1_000L), 0.0001f)
     }
 
     @Test
     fun fadeUsesTrimmedDuration() {
-        // If the trim duration is 2000, fade out starting at 1000 should apply to the final 1000ms.
         assertEquals(1f, AudioAutomation.gainAt(1_000L, 2_000L, 1f, 0L, 1_000L), 0.0001f)
         assertEquals(0.5f, AudioAutomation.gainAt(1_500L, 2_000L, 1f, 0L, 1_000L), 0.0001f)
     }
@@ -55,19 +46,30 @@ class ExportAudioProcessorTest {
     }
 
     @Test
-    fun fadeDurationsLargerThanActualDuration() {
-        // Should clamp fade to duration and cross over peacefully
+    fun fadeDurationsLargerThanActualDuration_areClamped() {
         assertEquals(0.5f, AudioAutomation.gainAt(500L, 1_000L, 1f, 2_000L, 0L), 0.0001f)
         assertEquals(0.5f, AudioAutomation.gainAt(500L, 1_000L, 1f, 0L, 2_000L), 0.0001f)
     }
 
     @Test
-    fun zeroFade() {
+    fun zeroFadeLeavesGainUnchanged() {
         assertEquals(1f, AudioAutomation.gainAt(500L, 1_000L, 1f, 0L, 0L), 0.0001f)
     }
 
     @Test
-    fun gainsAreAlwaysClampedToZeroThroughOne() {
+    fun volumeIsClampedToZeroThroughOne() {
+        assertEquals(1f, AudioAutomation.gainAt(500L, 1_000L, 2f, 0L, 0L), 0.0001f)
+        assertEquals(0f, AudioAutomation.gainAt(500L, 1_000L, -1f, 0L, 0L), 0.0001f)
+    }
+
+    @Test
+    fun combinedVolumeAndFadeMultiplyDeterministically() {
+        assertEquals(0.25f, AudioAutomation.gainAt(500L, 2_000L, 0.5f, 1_000L, 0L), 0.0001f)
+        assertEquals(0.25f, AudioAutomation.gainAt(1_500L, 2_000L, 0.5f, 0L, 1_000L), 0.0001f)
+    }
+
+    @Test
+    fun gainAlwaysRemainsWithinSafeRange() {
         val values = listOf(
             AudioAutomation.gainAt(-10L, 1_000L, 2f, 0L, 0L),
             AudioAutomation.gainAt(500L, 1_000L, -1f, 0L, 0L),
