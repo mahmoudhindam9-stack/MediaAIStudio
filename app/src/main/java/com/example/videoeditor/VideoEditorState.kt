@@ -62,7 +62,8 @@ data class VideoClip(
     override var isDuckingEnabled: Boolean = false, // Not usually used for video, but part of interface
 
     val originalDurationMs: Long = 0L,
-    val rotation: Float = 0f
+    val rotation: Float = 0f,
+    val isImage: Boolean = false
 ) : TimelineItem
 
 data class AudioClip(

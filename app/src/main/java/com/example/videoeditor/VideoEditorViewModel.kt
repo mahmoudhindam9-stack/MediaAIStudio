@@ -1,6 +1,7 @@
 package com.example.videoeditor
 
 import android.app.Application
+import android.content.ContentResolver
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -46,6 +47,12 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
 
     private val voiceOverManager = VoiceOverManagerImpl(application)
 
+    private data class MediaMetadataInfo(
+        val durationMs: Long,
+        val rotation: Float,
+        val isImage: Boolean
+    )
+
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.update { it.copy(isPlaying = isPlaying) }
@@ -78,8 +85,6 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         historyIndex = 0
         exoPlayer.addListener(playerListener)
 
-        // Update the global timeline playhead while playback runs. ExoPlayer's currentPosition
-        // is item-local when multiple MediaItems are concatenated, so convert it explicitly.
         viewModelScope.launch {
             while (true) {
                 delay(100)
@@ -88,8 +93,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    @Suppress("UNUSED_PARAMETER")
-    fun addMedia(uris: List<String>, contentResolver: android.content.ContentResolver) {
+    fun addMedia(uris: List<String>, contentResolver: ContentResolver) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
             val existingUris = _state.value.videoClips.mapTo(mutableSetOf()) { it.uri }
@@ -97,14 +101,14 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
 
             for (uriString in uris) {
                 if (!existingUris.add(uriString)) continue
-                val metadata = readMediaMetadata(uriString)
-                val duration = metadata.first.coerceAtLeast(100L)
-                val rotation = metadata.second
+                val metadata = readMediaMetadata(uriString, contentResolver)
+                val duration = if (metadata.isImage) 5_000L else metadata.durationMs.coerceAtLeast(10_000L)
                 newClips += VideoClip(
                     uri = uriString,
                     originalDurationMs = duration,
                     durationMs = duration,
-                    rotation = rotation
+                    rotation = metadata.rotation,
+                    isImage = metadata.isImage
                 )
             }
 
@@ -126,12 +130,12 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun addAudio(uris: List<String>, contentResolver: android.content.ContentResolver) {
+    fun addAudio(uris: List<String>, contentResolver: ContentResolver) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
             val current = _state.value
             val newTracks = uris.distinct().mapNotNull { uriString ->
-                val duration = readMediaMetadata(uriString).first
+                val duration = readMediaMetadata(uriString, contentResolver).durationMs
                 if (duration <= 0L) return@mapNotNull null
                 AudioClip(
                     type = AudioTrackType.MUSIC,
@@ -152,35 +156,48 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun readMediaMetadata(uriString: String): Pair<Long, Float> {
+    private fun readMediaMetadata(uriString: String, contentResolver: ContentResolver): MediaMetadataInfo {
+        val uri = Uri.parse(uriString)
+        val mime = runCatching { contentResolver.getType(uri) }.getOrNull()
+        val value = uriString.lowercase()
+        val isImage = mime?.startsWith("image/") == true || listOf(
+            ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif", ".bmp"
+        ).any(value::endsWith)
+        if (isImage) return MediaMetadataInfo(5_000L, 0f, true)
+
         var duration = 0L
         var rotation = 0f
         val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(getApplication(), Uri.parse(uriString))
+            retriever.setDataSource(getApplication(), uri)
             duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull()
                 ?: 0L
             rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
                 ?.toFloatOrNull()
                 ?: 0f
-        } catch (e: Exception) {
-            // The caller decides how to handle unavailable metadata.
+        } catch (_: Exception) {
+            // Caller applies a safe fallback for video media.
         } finally {
-            try {
-                retriever.release()
-            } catch (_: Exception) {
-            }
+            runCatching { retriever.release() }
         }
-        return duration to rotation
+        return MediaMetadataInfo(duration, rotation, false)
     }
 
     private fun recalculateTimeline(clips: List<VideoClip>): Pair<List<VideoClip>, Long> {
         var currentTime = 0L
         val recalculated = clips.map { clip ->
             val normalizedDuration = clip.durationMs.coerceAtLeast(100L)
-            val normalizedStart = clip.startTrimMs.coerceIn(0L, clip.originalDurationMs)
-            val maximumDuration = (clip.originalDurationMs - normalizedStart).coerceAtLeast(100L)
+            val normalizedStart = if (clip.isImage) {
+                0L
+            } else {
+                clip.startTrimMs.coerceIn(0L, clip.originalDurationMs)
+            }
+            val maximumDuration = if (clip.isImage) {
+                clip.originalDurationMs.coerceAtLeast(100L)
+            } else {
+                (clip.originalDurationMs - normalizedStart).coerceAtLeast(100L)
+            }
             val duration = normalizedDuration.coerceAtMost(maximumDuration)
             val newClip = clip.copy(
                 startTimeMs = currentTime,
@@ -205,7 +222,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             if (clip.startTrimMs < 0L) errors += "Negative startTrimMs on clip ${clip.id}"
             if (clip.durationMs < 0L) errors += "Negative durationMs on clip ${clip.id}"
             if (clip.originalDurationMs < 0L) errors += "Negative original duration on clip ${clip.id}"
-            if (clip.startTrimMs + clip.durationMs > clip.originalDurationMs) {
+            if (!clip.isImage && clip.startTrimMs + clip.durationMs > clip.originalDurationMs) {
                 errors += "Invalid trim range on clip ${clip.id}"
             }
             if (clip.startTimeMs != expectedStart) {
@@ -234,13 +251,15 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     fun loadInitialMedia(uriString: String) {
         if (_state.value.videoClips.isNotEmpty()) return
         viewModelScope.launch {
-            val metadata = readMediaMetadata(uriString)
-            val duration = metadata.first.coerceAtLeast(100L)
+            val contentResolver = getApplication<Application>().contentResolver
+            val metadata = readMediaMetadata(uriString, contentResolver)
+            val duration = if (metadata.isImage) 5_000L else metadata.durationMs.coerceAtLeast(10_000L)
             val clip = VideoClip(
                 uri = uriString,
                 originalDurationMs = duration,
                 durationMs = duration,
-                rotation = metadata.second
+                rotation = metadata.rotation,
+                isImage = metadata.isImage
             )
             val newState = _state.value.copy(
                 videoClips = listOf(clip),
@@ -260,16 +279,22 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         exoPlayer.pause()
         exoPlayer.clearMediaItems()
         s.videoClips.forEach { clip ->
-            val mediaItem = MediaItem.Builder()
+            val builder = MediaItem.Builder()
                 .setUri(Uri.parse(clip.uri))
+                .setMediaId(clip.id)
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(clip.id).build())
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(clip.startTrimMs)
-                        .setEndPositionMs(clip.startTrimMs + clip.durationMs)
-                        .build()
-                )
-                .build()
+            val mediaItem = if (clip.isImage) {
+                builder.setImageDurationMs(clip.durationMs).build()
+            } else {
+                builder
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(clip.startTrimMs)
+                            .setEndPositionMs(clip.startTrimMs + clip.durationMs)
+                            .build()
+                    )
+                    .build()
+            }
             exoPlayer.addMediaItem(mediaItem)
         }
         if (s.videoClips.isEmpty()) {
@@ -357,7 +382,10 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             val clip = s.videoClips.first { it.id == id }
             val range = normalizedRange(clip.originalDurationMs) ?: return
             val updated = s.videoClips.map {
-                if (it.id == id) it.copy(startTrimMs = range.first, durationMs = range.second - range.first) else it
+                if (it.id == id) {
+                    if (it.isImage) it.copy(startTrimMs = 0L, durationMs = range.second - range.first)
+                    else it.copy(startTrimMs = range.first, durationMs = range.second - range.first)
+                } else it
             }
             val (recalculated, total) = recalculateTimeline(updated)
             updateState(
@@ -424,6 +452,24 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         val cutOffset = s.playheadMs - clip.startTimeMs
         if (cutOffset < 100L || clip.durationMs - cutOffset < 100L) return
 
+        if (clip.isImage) {
+            val first = clip.copy(durationMs = cutOffset, startTrimMs = 0L)
+            val second = clip.copy(
+                id = UUID.randomUUID().toString(),
+                startTrimMs = 0L,
+                durationMs = clip.durationMs - cutOffset
+            )
+            val newClips = s.videoClips.toMutableList().apply {
+                set(index, first)
+                add(index + 1, second)
+            }
+            val (recalculated, total) = recalculateTimeline(newClips)
+            updateState(s.copy(videoClips = recalculated, durationMs = total, selectedItemId = second.id, isPlaying = false))
+            commitState()
+            updatePlayerMedia()
+            return
+        }
+
         val first = clip.copy(durationMs = cutOffset)
         val second = clip.copy(
             id = UUID.randomUUID().toString(),
@@ -488,13 +534,8 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun moveSelectedClipLeft() {
-        moveSelectedClip(-1)
-    }
-
-    fun moveSelectedClipRight() {
-        moveSelectedClip(1)
-    }
+    fun moveSelectedClipLeft() = moveSelectedClip(-1)
+    fun moveSelectedClipRight() = moveSelectedClip(1)
 
     private fun moveSelectedClip(delta: Int) {
         val s = _state.value
@@ -522,7 +563,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             isRecordingVoiceOver = false
             val track = voiceOverManager.getRecordedTrack()
             if (track != null) {
-                val duration = readMediaMetadata(track.uri).first.coerceAtLeast(100L)
+                val duration = readMediaMetadata(track.uri, getApplication<Application>().contentResolver).durationMs.coerceAtLeast(100L)
                 val audioClip = AudioClip(
                     type = AudioTrackType.VOICE_OVER,
                     uri = track.uri,
@@ -593,9 +634,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     fun applySmartCuts() {
         val s = _state.value
         val cuts = s.aiSuggestedCuts ?: return
-        val targetIndex = s.videoClips.indexOfFirst { it.id == s.selectedItemId }.let {
-            if (it >= 0) it else 0
-        }
+        val targetIndex = s.videoClips.indexOfFirst { it.id == s.selectedItemId }.let { if (it >= 0) it else 0 }
         val target = s.videoClips.getOrNull(targetIndex) ?: return
         val excluded = normalizeExcludedIntervals(cuts, target)
         if (excluded.isEmpty()) {
@@ -621,7 +660,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         val generated = validKept.map { (start, end) ->
             target.copy(
                 id = UUID.randomUUID().toString(),
-                startTrimMs = start,
+                startTrimMs = if (target.isImage) 0L else start,
                 durationMs = end - start
             )
         }
@@ -719,10 +758,10 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
             generativeEngine.jobs.collect { jobs ->
                 val job = jobs[jobId]
                 if (job != null) {
-                    if (job.state == JobState.FAILED) {
-                        _aiMessages.emit("Generation Failed: ${job.message}")
-                    } else if (job.state == JobState.COMPLETED) {
-                        _aiMessages.emit("Generation Completed!")
+                    when (job.state) {
+                        JobState.FAILED -> _aiMessages.emit("Generation Failed: ${job.message}")
+                        JobState.COMPLETED -> _aiMessages.emit("Generation Completed!")
+                        else -> Unit
                     }
                 }
             }
