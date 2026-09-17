@@ -28,6 +28,10 @@ import kotlin.math.max
 data class FaceTarget(
     val normalizedX: Float,
     val normalizedY: Float,
+    val imageX: Float,
+    val imageY: Float,
+    val imageWidth: Int,
+    val imageHeight: Int,
     val bounds: RectF,
     val trackingId: Int?
 )
@@ -74,8 +78,10 @@ class FaceFocusAnalyzer(
             .addOnSuccessListener { faces ->
                 val target = selectTarget(faces, image.width, image.height)
                 if (target == null) {
+                    lastX = -1f
+                    lastY = -1f
                     onTargetChanged(null)
-                } else if (lastX < 0f || distance(target.normalizedX, target.normalizedY, lastX, lastY) > 0.035f) {
+                } else if (lastX < 0f || distance(target.normalizedX, target.normalizedY, lastX, lastY) > 0.025f) {
                     lastX = target.normalizedX
                     lastY = target.normalizedY
                     onTargetChanged(target)
@@ -90,14 +96,25 @@ class FaceFocusAnalyzer(
     }
 
     private fun selectTarget(faces: List<Face>, width: Int, height: Int): FaceTarget? {
-        val face = faces.maxByOrNull { face ->
-            face.boundingBox.width().toLong() * face.boundingBox.height().toLong()
+        val face = faces.maxByOrNull { currentFace ->
+            currentFace.boundingBox.width().toLong() * currentFace.boundingBox.height().toLong()
         } ?: return null
 
         val bounds = RectF(face.boundingBox)
-        val centerX = ((bounds.centerX() / max(width, 1)).coerceIn(0f, 1f))
-        val centerY = ((bounds.centerY() / max(height, 1)).coerceIn(0f, 1f))
-        return FaceTarget(centerX, centerY, bounds, face.trackingId)
+        val imageX = bounds.centerX().coerceIn(0f, width.toFloat())
+        val imageY = bounds.centerY().coerceIn(0f, height.toFloat())
+        val centerX = (imageX / max(width, 1)).coerceIn(0f, 1f)
+        val centerY = (imageY / max(height, 1)).coerceIn(0f, 1f)
+        return FaceTarget(
+            normalizedX = centerX,
+            normalizedY = centerY,
+            imageX = imageX,
+            imageY = imageY,
+            imageWidth = width,
+            imageHeight = height,
+            bounds = bounds,
+            trackingId = face.trackingId
+        )
     }
 
     private fun distance(ax: Float, ay: Float, bx: Float, by: Float): Float {
