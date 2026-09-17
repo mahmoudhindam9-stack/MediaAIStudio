@@ -44,8 +44,8 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
         ) {
             composable<Screen.Home> { HomeScreen(navController) }
             composable<Screen.Camera> {
-                CameraProScreen2 { uriString ->
-                    navController.navigate(Screen.MediaDetail(uriString))
+                CameraProScreen2 { _ ->
+                    // Captures remain inside the camera screen. The saved media is available in the Library.
                 }
             }
             composable<Screen.Library> {
