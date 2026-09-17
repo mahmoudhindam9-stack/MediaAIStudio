@@ -37,6 +37,7 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,6 +84,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -93,6 +95,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import com.example.R
 import com.example.ai.core.AIResult
 import com.example.ai.image.enhancement.CpgaLowLightEngine
@@ -186,6 +191,19 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
     var extensionsManager by remember { mutableStateOf<ExtensionsManager?>(null) }
     var lastCapturedUri by remember { mutableStateOf<String?>(null) }
     var processing by remember { mutableStateOf(false) }
+    var shutterPulse by remember { mutableStateOf(false) }
+
+    val shutterScale by animateFloatAsState(
+        targetValue = if (shutterPulse) 0.78f else 1f,
+        label = "shutterPulse"
+    )
+
+    LaunchedEffect(shutterPulse) {
+        if (shutterPulse) {
+            delay(150)
+            shutterPulse = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         val future = ProcessCameraProvider.getInstance(context)
@@ -332,7 +350,10 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         if (countdown > 0) {
             delay(1000)
             countdown--
-            if (countdown == 0) capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it }
+            if (countdown == 0) {
+                shutterPulse = true
+                capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it }
+            }
         }
     }
 
@@ -391,17 +412,63 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         }
 
         lastCapturedUri?.let { uri ->
-            TextButton(
-                onClick = { onMediaCaptured(uri) },
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 88.dp)
-            ) { Text("OPEN", color = Color.Yellow, fontWeight = FontWeight.Bold) }
+            val lastUri = Uri.parse(uri)
+            val isVideo = context.contentResolver.getType(lastUri)?.startsWith("video/") == true
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 112.dp)
+                    .size(66.dp)
+                    .border(2.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(12.dp))
+                    .background(Color.Black, RoundedCornerShape(12.dp))
+                    .clickable { onMediaCaptured(uri) }
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(lastUri)
+                        .crossfade(true)
+                        .apply { if (isVideo) videoFrameMillis(500) }
+                        .build(),
+                    contentDescription = "Open latest capture",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (isVideo) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(3.dp)
+                            .background(Color.Black.copy(alpha = 0.7f), CircleShape)
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) { Text("▶", color = Color.White, fontSize = androidx.compose.ui.unit.sp(10)) }
+                }
+            }
         }
 
         if (processing) Surface(Modifier.align(Alignment.TopCenter).padding(top = 88.dp), color = Color.Black.copy(alpha = 0.78f), shape = RoundedCornerShape(16.dp)) {
             Text(if (mode == CameraMode.AI) "AI processing…" else "Processing…", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
         }
 
-        if (isRecording) Surface(Modifier.align(Alignment.TopCenter).padding(top = 124.dp), color = Color.Black.copy(alpha = 0.65f), shape = RoundedCornerShape(16.dp)) { Text(String.format(Locale.US, "%02d:%02d", elapsed / 60, elapsed % 60), color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)) }
+        if (isRecording) {
+            Surface(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 138.dp),
+                color = Color.Black.copy(alpha = 0.72f),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Box(Modifier.size(8.dp).background(Color.Red, CircleShape))
+                    Text("REC ${String.format(Locale.US, "%02d:%02d", elapsed / 60, elapsed % 60)}", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        if (countdown > 0) Surface(Modifier.align(Alignment.Center), color = Color.Black.copy(alpha = 0.62f), shape = CircleShape) {
+            Text(countdown.toString(), color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(24.dp))
+        }
 
         Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 128.dp), Arrangement.SpaceEvenly) {
             CameraMode.values().forEach { m ->
@@ -423,15 +490,27 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
 
         Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             IconButton(onClick = { showTools = !showTools }) { Icon(Icons.Default.Settings, null, tint = Color.White) }
-            Box(Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp).background(if (isRecording) Color.Red else Color.White, if (isRecording) RoundedCornerShape(12.dp) else CircleShape).clickable(enabled = countdown == 0 && !processing) {
-                if (mode == CameraMode.VIDEO || mode == CameraMode.SLOW_MO) {
-                    if (recording == null) {
-                        startRecording(context, recorder, { recording = it; isRecording = true }, { uri -> recording = null; isRecording = false; paused = false; uri?.let { lastCapturedUri = it } })
-                    } else recording?.stop()
-                } else {
-                    if (timer > 0) countdown = timer else scope.launch { capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it } }
-                }
-            })
+            Box(
+                Modifier
+                    .size(78.dp)
+                    .graphicsLayer { scaleX = shutterScale; scaleY = shutterScale }
+                    .border(4.dp, Color.White, CircleShape)
+                    .padding(8.dp)
+                    .background(
+                        if (isRecording) Color.Red else Color.White,
+                        if (isRecording) RoundedCornerShape(12.dp) else CircleShape
+                    )
+                    .clickable(enabled = countdown == 0 && !processing) {
+                        shutterPulse = true
+                        if (mode == CameraMode.VIDEO || mode == CameraMode.SLOW_MO) {
+                            if (recording == null) {
+                                startRecording(context, recorder, { recording = it; isRecording = true }, { uri -> recording = null; isRecording = false; paused = false; uri?.let { lastCapturedUri = it } })
+                            } else recording?.stop()
+                        } else {
+                            if (timer > 0) countdown = timer else scope.launch { capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it } }
+                        }
+                    }
+            )
             if (isRecording) IconButton(onClick = { recording?.let { if (paused) { it.resume(); paused=false } else { it.pause(); paused=true } } }) { Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, null, tint = Color.White) }
         }
     }
