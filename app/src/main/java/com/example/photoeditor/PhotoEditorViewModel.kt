@@ -1,4 +1,6 @@
+
 package com.example.photoeditor
+import kotlinx.coroutines.flow.first
 
 import android.app.Application
 import android.graphics.Bitmap
@@ -174,7 +176,10 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
 
                 aiProgress.value = AIProgress(0f, "Preparing...")
                 aiError.value = null
-                val result = aiEngine.processImage(request) { progress ->
+                val pref = com.example.settings.SettingsPreferences(getApplication())
+                val preferredAiMode = pref.aiMode.first()
+
+                val result = aiEngine.processImage(request, preferredAiMode) { progress ->
                     aiProgress.value = progress
                 }
                 aiProgress.value = null

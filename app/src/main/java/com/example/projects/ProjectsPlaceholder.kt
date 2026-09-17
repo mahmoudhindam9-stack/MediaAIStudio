@@ -66,7 +66,7 @@ fun ProjectsScreen(navController: NavController) {
     var renameProject by remember { mutableStateOf<MediaProject?>(null) }
     var deleteProject by remember { mutableStateOf<MediaProject?>(null) }
     var projectWaitingForMedia by remember { mutableStateOf<String?>(null) }
-    var pickerMime by remember { mutableStateOf("*/*") }
+    var pickerMime by rememberSaveable { mutableStateOf("*/*") }
 
     fun refresh() {
         projects = repository.getProjects()
@@ -238,7 +238,13 @@ fun ProjectsScreen(navController: NavController) {
         CreateProjectDialog(
             onDismiss = { showCreateDialog = false },
             onCreate = { name, type ->
-                val created = repository.createProject(name, type)
+                val created =
+                    repository.createProject(
+                        name.trim().ifBlank {
+                            "Untitled Project"
+                        },
+                        type
+                    )
                 refresh()
                 showCreateDialog = false
                 pickMediaFor(created)
@@ -251,9 +257,12 @@ fun ProjectsScreen(navController: NavController) {
             project = project,
             onDismiss = { renameProject = null },
             onRename = { newName ->
-                repository.renameProject(project.id, newName)
-                refresh()
-                renameProject = null
+                val cleanedName = newName.trim()
+                if (cleanedName.isNotEmpty()) {
+                    repository.renameProject(project.id, cleanedName)
+                    refresh()
+                    renameProject = null
+                }
             }
         )
     }
