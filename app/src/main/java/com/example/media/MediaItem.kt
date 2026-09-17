@@ -11,5 +11,6 @@ data class MediaItem(
     val duration: Long? = null,
     val width: Int? = null,
     val height: Int? = null,
-    val isVideo: Boolean = mimeType.startsWith("video/")
+    val isVideo: Boolean = mimeType.startsWith("video/"),
+    val relativePath: String? = null
 )
