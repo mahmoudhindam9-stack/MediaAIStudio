@@ -20,59 +20,80 @@ class FallbackAssistantPlannerTest {
     }
 
     @Test
-    fun `brightness request creates brightness action`() = runBlocking {
+    fun `brightness request uses effective editor range`() = runBlocking {
         val result = planner.createPlan("make it brighter", context)
         assertTrue(result is AssistantResult.Planned)
-        val actions = (result as AssistantResult.Planned).plan.actions
-        assertEquals(1, actions.size)
-        assertTrue(actions[0] is AssistantAction.AdjustBrightness)
+        val action = (result as AssistantResult.Planned).plan.actions.single()
+        assertEquals(25f, (action as AssistantAction.AdjustBrightness).amount, 0.001f)
+    }
+
+    @Test
+    fun `darker request produces negative brightness`() = runBlocking {
+        val result = planner.createPlan("make it darker", context)
+        assertTrue(result is AssistantResult.Planned)
+        val action = (result as AssistantResult.Planned).plan.actions.single()
+        assertEquals(-25f, (action as AssistantAction.AdjustBrightness).amount, 0.001f)
     }
 
     @Test
     fun `contrast request creates contrast action`() = runBlocking {
         val result = planner.createPlan("increase contrast", context)
         assertTrue(result is AssistantResult.Planned)
-        val actions = (result as AssistantResult.Planned).plan.actions
-        assertEquals(1, actions.size)
-        assertTrue(actions[0] is AssistantAction.AdjustContrast)
+        val action = (result as AssistantResult.Planned).plan.actions.single()
+        assertEquals(0.10f, (action as AssistantAction.AdjustContrast).amount, 0.001f)
     }
 
     @Test
     fun `saturation request creates saturation action`() = runBlocking {
         val result = planner.createPlan("increase saturation", context)
         assertTrue(result is AssistantResult.Planned)
-        val actions = (result as AssistantResult.Planned).plan.actions
-        assertEquals(1, actions.size)
-        assertTrue(actions[0] is AssistantAction.AdjustSaturation)
+        val action = (result as AssistantResult.Planned).plan.actions.single()
+        assertEquals(0.10f, (action as AssistantAction.AdjustSaturation).amount, 0.001f)
     }
 
     @Test
     fun `temperature request creates temperature action`() = runBlocking {
         val result = planner.createPlan("make it warmer", context)
         assertTrue(result is AssistantResult.Planned)
-        val actions = (result as AssistantResult.Planned).plan.actions
-        assertEquals(1, actions.size)
-        assertTrue(actions[0] is AssistantAction.AdjustTemperature)
+        val action = (result as AssistantResult.Planned).plan.actions.single()
+        assertEquals(0.10f, (action as AssistantAction.AdjustTemperature).amount, 0.001f)
     }
 
     @Test
-    fun `background removal request creates remove background action`() = runBlocking {
+    fun `arabic request creates multiple actions`() = runBlocking {
+        val result = planner.createPlan("زود الإضاءة وخلي الألوان أقوى وخلي الصورة دافئة", context)
+        assertTrue(result is AssistantResult.Planned)
+        val plan = (result as AssistantResult.Planned).plan
+        assertEquals(3, plan.actions.size)
+        assertTrue(plan.actions.any { it is AssistantAction.AdjustBrightness })
+        assertTrue(plan.actions.any { it is AssistantAction.AdjustSaturation })
+        assertTrue(plan.actions.any { it is AssistantAction.AdjustTemperature })
+    }
+
+    @Test
+    fun `background removal requires confirmation`() = runBlocking {
         val result = planner.createPlan("remove background", context)
         assertTrue(result is AssistantResult.Planned)
         val plan = (result as AssistantResult.Planned).plan
-        assertEquals(1, plan.actions.size)
-        assertTrue(plan.actions[0] is AssistantAction.RemoveBackground)
         assertTrue(plan.requiresConfirmation)
+        assertTrue(plan.actions.single() is AssistantAction.RemoveBackground)
     }
 
     @Test
-    fun `multi action prompt creates multiple actions`() = runBlocking {
-        val result = planner.createPlan("make it brighter and warmer", context)
-        assertTrue(result is AssistantResult.Planned)
-        val plan = (result as AssistantResult.Planned).plan
-        assertEquals(2, plan.actions.size)
-        assertTrue(plan.actions.any { it is AssistantAction.AdjustBrightness })
-        assertTrue(plan.actions.any { it is AssistantAction.AdjustTemperature })
+    fun `assistant converts confirmation plan into confirmation result`() = runBlocking {
+        val result = AIAssistant(planner).plan("remove background", context)
+        assertTrue(result is AssistantResult.NeedsConfirmation)
+        assertTrue((result as AssistantResult.NeedsConfirmation).plan.requiresConfirmation)
+    }
+
+    @Test
+    fun `undo and redo are recognized`() = runBlocking {
+        val undo = planner.createPlan("undo", context)
+        val redo = planner.createPlan("redo", context)
+        assertTrue(undo is AssistantResult.Planned)
+        assertTrue(redo is AssistantResult.Planned)
+        assertTrue((undo as AssistantResult.Planned).plan.actions.single() is AssistantAction.Undo)
+        assertTrue((redo as AssistantResult.Planned).plan.actions.single() is AssistantAction.Redo)
     }
 
     @Test
