@@ -11,7 +11,7 @@ import org.robolectric.annotation.Config
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest=Config.NONE)
+@Config(manifest=Config.NONE, sdk=[34])
 class TimelineTest {
 
     private lateinit var viewModel: VideoEditorViewModel
