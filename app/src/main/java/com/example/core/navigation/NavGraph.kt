@@ -28,7 +28,7 @@ import com.example.home.HomeScreen
 import com.example.media.LibraryScreen
 import com.example.media.MediaDetailScreen
 import com.example.photoeditor.PhotoEditorScreen
-import com.example.projects.ProjectsPlaceholder
+import com.example.projects.ProjectsScreen
 import com.example.settings.SettingsScreen
 import com.example.update.ui.UpdateScreen
 import androidx.compose.ui.res.stringResource
@@ -80,7 +80,7 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
                 )
             }
             composable<Screen.AITools> { AIToolsScreen { navController.popBackStack() } }
-            composable<Screen.Projects> { ProjectsPlaceholder() }
+            composable<Screen.Projects> { ProjectsScreen(navController) }
             composable<Screen.Update> { UpdateScreen { navController.navigateUp() } }
             composable<Screen.Settings> {
                 SettingsScreen(
