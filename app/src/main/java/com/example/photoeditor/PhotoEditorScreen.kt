@@ -125,7 +125,7 @@ fun PhotoEditorScreen(
             contentAlignment = Alignment.Center
         ) {
             if (originalBitmap != null) {
-                BoxWithConstraints {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                     val boxWidth = constraints.maxWidth.toFloat()
                     val boxHeight = constraints.maxHeight.toFloat()
                     
@@ -149,6 +149,7 @@ fun PhotoEditorScreen(
                     Box(
                         modifier = Modifier
                             .size((renderWidth / density.density).dp, (renderHeight / density.density).dp)
+                            .align(Alignment.Center)
                             .background(MaterialTheme.colorScheme.background)
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize().pointerInput(currentTab, state.cropAspectRatio, fullW, fullH, scale) {
