@@ -220,6 +220,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         } catch (_: Exception) { extensionsManager = null }
     }
 
+
     DisposableEffect(Unit) {
         onDispose {
             try { recording?.stop(); recording?.close() } catch (_: Exception) { }
@@ -227,6 +228,11 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             analysis.clearAnalyzer()
             faceAnalyzer.close()
             executor.shutdown()
+        }
+    }
+    DisposableEffect(lens, mode, slowFps) {
+        onDispose {
+            try { recording?.stop(); recording?.close() } catch (_: Exception) { }
         }
     }
 
@@ -256,17 +262,17 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             when (mode) {
                 CameraMode.SLOW_MO -> {
                     val caps = Recorder.getHighSpeedVideoCapabilities(info)
-                    if (caps == null) { supportedSlowFps = emptyList(); return@LaunchedEffect }
+                    if (caps == null) { supportedSlowFps = emptyList(); camera = p.bindToLifecycle(lifecycleOwner, selector, preview); return@LaunchedEffect }
                     val qualities = caps.getSupportedQualities(DynamicRange.SDR)
                     val quality = listOf(Quality.FHD, Quality.HD, Quality.SD).firstOrNull { it in qualities }
-                        ?: run { supportedSlowFps = emptyList(); return@LaunchedEffect }
+                        ?: run { supportedSlowFps = emptyList(); camera = p.bindToLifecycle(lifecycleOwner, selector, preview); return@LaunchedEffect }
                     val highSpeedRecorder = Recorder.Builder().setQualitySelector(QualitySelector.from(quality)).build()
                     val highSpeedCapture = VideoCapture.withOutput(highSpeedRecorder)
                     val probe = HighSpeedVideoSessionConfig.Builder(highSpeedCapture).setPreview(preview).setSlowMotionEnabled(true).build()
                     val ranges = info.getSupportedFrameRateRanges(probe)
                     val options = ranges.flatMap { r -> listOf(120, 240).filter { r.contains(it) } }.distinct().sortedDescending()
                     supportedSlowFps = options
-                    if (options.isEmpty()) return@LaunchedEffect
+                    if (options.isEmpty()) { camera = p.bindToLifecycle(lifecycleOwner, selector, preview); return@LaunchedEffect }
                     val selected = slowFps.takeIf { it in options } ?: options.first()
                     if (selected != slowFps) { slowFps = selected; return@LaunchedEffect }
                     val exactRange = ranges.firstOrNull { it.lower == selected && it.upper == selected } ?: ranges.first { it.contains(selected) }
@@ -306,11 +312,11 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                     } catch (_: Exception) {
                         analysis.clearAnalyzer(); p.bindToLifecycle(lifecycleOwner, selector, preview, c)
                     }
-                    c.flashMode = flashMode
+                    c.flashMode = if (hasFlash) flashMode else ImageCapture.FLASH_MODE_OFF
                 }
             }
-            camera?.cameraInfo?.zoomState?.value?.let { z -> zoom = z.zoomRatio; minZoom = z.minZoomRatio; maxZoom = z.maxZoomRatio }
-            exposureRange?.let { exposure = exposure.coerceIn(it.lower, it.upper) }
+            camera?.cameraInfo?.zoomState?.value?.let { z -> minZoom = z.minZoomRatio; maxZoom = z.maxZoomRatio; zoom = zoom.coerceIn(minZoom, maxZoom); camera?.cameraControl?.setZoomRatio(zoom) }
+            exposureRange?.let { exposure = exposure.coerceIn(it.lower, it.upper); camera?.cameraControl?.setExposureCompensationIndex(exposure) }
         } catch (t: Throwable) {
             android.util.Log.e("CameraPro", "Camera binding failed", t)
         }

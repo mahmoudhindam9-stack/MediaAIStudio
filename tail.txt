@@ -1,0 +1,120 @@
+    val r = recorder ?: return
+    val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US).format(System.currentTimeMillis())
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+        put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/MediaAIStudio")
+    }
+    var pending = r.prepareRecording(context, MediaStoreOutputOptions.Builder(context.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build())
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) pending = pending.withAudioEnabled()
+    val active = pending.start(ContextCompat.getMainExecutor(context)) { event -> if (event is VideoRecordEvent.Finalize) onFinish(if (event.hasError()) null else event.outputResults.outputUri.toString()) }
+    onStart(active)
+}
+
+private suspend fun capturePhoto(
+    capture: ImageCapture?,
+    context: Context,
+    mode: CameraMode,
+    blur: Float,
+    scope: CoroutineScope,
+    onProcessingChanged: (Boolean) -> Unit,
+    onResult: (String) -> Unit
+) {
+    val c = capture ?: return
+    c.targetRotation = c.targetRotation
+    val currentRotation = c.targetRotation
+    if (currentRotation != Surface.ROTATION_0 && currentRotation != Surface.ROTATION_90 && currentRotation != Surface.ROTATION_180 && currentRotation != Surface.ROTATION_270) {
+        c.targetRotation = Surface.ROTATION_0
+    }
+    val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US).format(System.currentTimeMillis())
+    val values = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MediaAIStudio")
+    }
+    val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
+    c.takePicture(options, ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageSavedCallback {
+        override fun onError(exception: ImageCaptureException) {
+            android.util.Log.e("CameraPro", "Photo capture failed", exception)
+        }
+        override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+            val uri = result.savedUri ?: return
+            if (mode == CameraMode.AI || mode == CameraMode.NIGHT || mode == CameraMode.PORTRAIT) onProcessingChanged(true)
+            scope.launch(Dispatchers.Default) {
+                try {
+                    val finalUri = when (mode) {
+                        CameraMode.PORTRAIT -> if (blur > 0f) try { PortraitBlurProcessor.process(context, uri.toString(), blur) } catch (t: Throwable) { android.util.Log.e("CameraPro", "Portrait processing failed", t); uri.toString() } else uri.toString()
+                        CameraMode.NIGHT -> try {
+                            when (val ai = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }) {
+                                is AIResult.Success -> ai.outputUri
+                                else -> { android.util.Log.e("CameraPro", "Night CPGA failed: $ai"); uri.toString() }
+                            }
+                        } catch (t: Throwable) { android.util.Log.e("CameraPro", "Night processing failed", t); uri.toString() }
+                        CameraMode.AI -> try {
+                            val aiInput = createAiWorkingCopy(context, uri.toString(), 1024)
+                            val lowLight = CpgaLowLightEngine(context.applicationContext).process(aiInput) { }
+                            val enhancedUri = (lowLight as? AIResult.Success)?.outputUri
+                            if (enhancedUri == null) {
+                                android.util.Log.e("CameraPro", "AI CPGA failed: $lowLight")
+                                uri.toString()
+                            } else {
+                                val upscale = RealEsrganUpscaleEngine(context.applicationContext).process(enhancedUri, 2, { })
+                                (upscale as? AIResult.Success)?.outputUri ?: run {
+                                    android.util.Log.e("CameraPro", "AI Real-ESRGAN failed: $upscale")
+                                    enhancedUri
+                                }
+                            }
+                        } catch (t: Throwable) { android.util.Log.e("CameraPro", "AI processing failed", t); uri.toString() }
+                        else -> uri.toString()
+                    }
+                    onResult(finalUri)
+                } finally {
+                    if (mode == CameraMode.AI || mode == CameraMode.NIGHT || mode == CameraMode.PORTRAIT) scope.launch { onProcessingChanged(false) }
+                }
+            }
+        }
+    })
+}
+
+private fun createAiWorkingCopy(context: Context, sourceUri: String, maxDimension: Int): String {
+    val appContext = context.applicationContext
+    val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(appContext.contentResolver, Uri.parse(sourceUri))) { decoder, _, _ ->
+            decoder.isMutableRequired = false
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        MediaStore.Images.Media.getBitmap(appContext.contentResolver, Uri.parse(sourceUri))
+    }
+
+    val largest = maxOf(source.width, source.height)
+    if (largest <= maxDimension) {
+        source.recycle()
+        return sourceUri
+    }
+
+    val scale = maxDimension.toFloat() / largest.toFloat()
+    val width = (source.width * scale).toInt().coerceAtLeast(1)
+    val height = (source.height * scale).toInt().coerceAtLeast(1)
+    val resized = Bitmap.createScaledBitmap(source, width, height, true)
+    source.recycle()
+
+    val file = File(appContext.cacheDir, "ai_input_${System.currentTimeMillis()}.jpg")
+    FileOutputStream(file).use { out ->
+        check(resized.compress(Bitmap.CompressFormat.JPEG, 95, out)) { "Failed to create AI working copy" }
+    }
+    resized.recycle()
+    return FileProvider.getUriForFile(
+        appContext,
+        "${appContext.packageName}.fileprovider",
+        file
+    ).toString()
+}
+
+@Composable
+private fun GridOverlay(modifier: Modifier) {
+    Box(modifier) {
+        Box(Modifier.fillMaxWidth().height(1.dp).align(Alignment.Center).background(Color.White.copy(alpha = 0.18f)))
+        Box(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = 0.16f)))
+    }
+}

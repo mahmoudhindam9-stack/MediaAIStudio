@@ -24,7 +24,6 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
 
-
 data class FaceTarget(
     val normalizedX: Float,
     val normalizedY: Float,
@@ -61,7 +60,6 @@ class FaceFocusAnalyzer(
             imageProxy.close()
             return
         }
-
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastTimestamp < 140L) {
             imageProxy.close()
@@ -74,7 +72,6 @@ class FaceFocusAnalyzer(
                 mediaImage,
                 imageProxy.imageInfo.rotationDegrees
             )
-
             detector.process(image)
                 .addOnSuccessListener { faces ->
                     val target = selectTarget(faces, image.width, image.height)
@@ -107,8 +104,10 @@ class FaceFocusAnalyzer(
         val bounds = RectF(face.boundingBox)
         val imageX = bounds.centerX().coerceIn(0f, width.toFloat())
         val imageY = bounds.centerY().coerceIn(0f, height.toFloat())
+        
         val centerX = (imageX / max(width, 1)).coerceIn(0f, 1f)
         val centerY = (imageY / max(height, 1)).coerceIn(0f, 1f)
+
         return FaceTarget(
             normalizedX = centerX,
             normalizedY = centerY,
@@ -136,7 +135,6 @@ class FaceFocusAnalyzer(
 
 /** Real on-device portrait background blur using ML Kit Subject Segmentation. */
 object PortraitBlurProcessor {
-
     suspend fun process(
         context: Context,
         sourceUri: String,
@@ -159,6 +157,7 @@ object PortraitBlurProcessor {
                 ?: throw IllegalStateException("Foreground segmentation returned no bitmap")
 
             val background = createBlurredBackground(source, blurStrength)
+
             val composed = Bitmap.createBitmap(
                 source.width,
                 source.height,
@@ -207,9 +206,11 @@ object PortraitBlurProcessor {
         val ratio = reducedSize.toFloat() / shortest.toFloat()
         val reducedW = (source.width * ratio).toInt().coerceAtLeast(1)
         val reducedH = (source.height * ratio).toInt().coerceAtLeast(1)
+
         val reduced = Bitmap.createScaledBitmap(source, reducedW, reducedH, true)
         val blurred = Bitmap.createScaledBitmap(reduced, source.width, source.height, true)
         reduced.recycle()
+
         return blurred
     }
 
