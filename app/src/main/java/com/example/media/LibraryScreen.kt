@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -44,7 +45,7 @@ import com.example.core.permission.PermissionManagerImpl
 import com.example.ui.components.EmptyState
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(
     onNavigateToMediaDetail: (String) -> Unit,
@@ -173,9 +174,7 @@ fun LibraryScreen(
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = { selectedUris = mediaItems.map { it.uri.toString() }.toSet() }
-                        ) {
+                        IconButton(onClick = { selectedUris = mediaItems.map { it.uri.toString() }.toSet() }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select all")
                         }
                     }
@@ -198,11 +197,7 @@ fun LibraryScreen(
                         BulkActionButton(Icons.Default.Edit, "Edit", enabled = selectedUris.size == 1) {
                             selectedItems().firstOrNull()?.let { onNavigateToMediaDetail(it.uri.toString()) }
                         }
-                        BulkActionButton(
-                            Icons.Default.Collections,
-                            "Merge",
-                            enabled = selectedUris.size >= 2 && selectedItems().all { !it.isVideo }
-                        ) {
+                        BulkActionButton(Icons.Default.Collections, "Merge", enabled = selectedUris.size >= 2 && selectedItems().all { !it.isVideo }) {
                             coroutineScope.launch {
                                 isBusy = true
                                 try {
@@ -235,11 +230,7 @@ fun LibraryScreen(
             }
         }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
+        Box(Modifier.fillMaxSize().padding(paddingValues)) {
             when {
                 isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 !hasPermissions -> Column(
@@ -272,9 +263,7 @@ fun LibraryScreen(
                                     onNavigateToMediaDetail(item.uri.toString())
                                 }
                             },
-                            onLongClick = {
-                                selectedUris = selectedUris + item.uri.toString()
-                            }
+                            onLongClick = { selectedUris = selectedUris + item.uri.toString() }
                         )
                     }
                 }
@@ -337,10 +326,9 @@ fun LibraryScreen(
                     if (albumDialogMode == AlbumDialogMode.ADD && existingAlbums.isNotEmpty()) {
                         Text("Existing albums", style = MaterialTheme.typography.labelLarge)
                         existingAlbums.take(8).forEach { existing ->
-                            TextButton(
-                                onClick = { albumName = existing },
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text(existing, modifier = Modifier.fillMaxWidth()) }
+                            TextButton(onClick = { albumName = existing }, modifier = Modifier.fillMaxWidth()) {
+                                Text(existing, modifier = Modifier.fillMaxWidth())
+                            }
                         }
                     }
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -411,7 +399,6 @@ fun MediaItemThumbnail(
             .crossfade(true)
             .apply { if (mediaItem.isVideo) videoFrameMillis(1000) }
             .build()
-
         AsyncImage(
             model = request,
             contentDescription = mediaItem.name,
@@ -420,19 +407,12 @@ fun MediaItemThumbnail(
         )
 
         if (selected) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.28f))
-            )
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
             Icon(
                 Icons.Default.CheckCircle,
                 contentDescription = "Selected",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(26.dp)
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(26.dp)
             )
         }
 
