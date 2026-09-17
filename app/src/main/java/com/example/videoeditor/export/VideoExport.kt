@@ -270,9 +270,46 @@ class VideoExport(private val context: Context) {
     ): Effects {
         val channelMixer = ChannelMixingAudioProcessor()
         for (inputChannelCount in 1..6) {
-            channelMixer.putChannelMixingMatrix(
-                ChannelMixingMatrix.createForConstantPower(inputChannelCount, 2)
-            )
+            val matrix = when (inputChannelCount) {
+                1 -> ChannelMixingMatrix(
+                    1, 2,
+                    floatArrayOf(0.7071f, 0.7071f)
+                )
+                2 -> ChannelMixingMatrix(
+                    2, 2,
+                    floatArrayOf(1.0f, 0.0f, 0.0f, 1.0f)
+                )
+                3 -> ChannelMixingMatrix(
+                    3, 2,
+                    floatArrayOf(
+                        1.0f, 0.0f, 0.7071f,
+                        0.0f, 1.0f, 0.7071f
+                    )
+                )
+                4 -> ChannelMixingMatrix(
+                    4, 2,
+                    floatArrayOf(
+                        1.0f, 0.0f, 0.7071f, 0.0f,
+                        0.0f, 1.0f, 0.0f, 0.7071f
+                    )
+                )
+                5 -> ChannelMixingMatrix(
+                    5, 2,
+                    floatArrayOf(
+                        1.0f, 0.0f, 0.7071f, 0.7071f, 0.0f,
+                        0.0f, 1.0f, 0.7071f, 0.0f, 0.7071f
+                    )
+                )
+                6 -> ChannelMixingMatrix(
+                    6, 2,
+                    floatArrayOf(
+                        1.0f, 0.0f, 0.7071f, 0.5f, 0.7071f, 0.0f,
+                        0.0f, 1.0f, 0.7071f, 0.5f, 0.0f, 0.7071f
+                    )
+                )
+                else -> error("Unsupported input channel count: $inputChannelCount")
+            }
+            channelMixer.putChannelMixingMatrix(matrix)
         }
 
         val processors = mutableListOf<AudioProcessor>(ToInt16PcmAudioProcessor(), channelMixer)
