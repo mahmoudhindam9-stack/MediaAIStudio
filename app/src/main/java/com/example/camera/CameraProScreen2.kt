@@ -6,6 +6,9 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Range
@@ -20,6 +23,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -87,6 +91,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.ai.core.AIResult
@@ -98,6 +103,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -157,7 +164,7 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
     var lens by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
     var canSwitch by remember { mutableStateOf(false) }
     var hasFlash by remember { mutableStateOf(false) }
-    var flashMode by remember { mutableIntStateOf(ImageCapture.FLASH_MODE_OFF) }
+    var flashMode by remember { mutableIntStateOf(ImageCapture.FLASH_MODE_AUTO) }
     var torch by remember { mutableStateOf(false) }
     var faceFocus by remember { mutableStateOf(true) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
@@ -177,6 +184,8 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
     var nightAvailable by remember { mutableStateOf(false) }
     var hdrAvailable by remember { mutableStateOf(false) }
     var extensionsManager by remember { mutableStateOf<ExtensionsManager?>(null) }
+    var lastCapturedUri by remember { mutableStateOf<String?>(null) }
+    var processing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val future = ProcessCameraProvider.getInstance(context)
@@ -215,8 +224,16 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             bokehAvailable = extensionsManager?.isExtensionAvailable(selector, ExtensionMode.BOKEH) == true
             nightAvailable = extensionsManager?.isExtensionAvailable(selector, ExtensionMode.NIGHT) == true
             hdrAvailable = extensionsManager?.isExtensionAvailable(selector, ExtensionMode.HDR) == true
-            p.unbindAll(); analysis.clearAnalyzer(); faceTarget = null
-            val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
+            p.unbindAll()
+            analysis.clearAnalyzer()
+            faceTarget = null
+            focusPoint = null
+            torch = false
+            capture = null
+            recorder = null
+            val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
+            analysis.targetRotation = rotation
+            val preview = Preview.Builder().setTargetRotation(rotation).build().also { it.surfaceProvider = previewView.surfaceProvider }
 
             when (mode) {
                 CameraMode.SLOW_MO -> {
@@ -251,10 +268,12 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
                     catch (_: Exception) { analysis.clearAnalyzer(); p.bindToLifecycle(lifecycleOwner, selector, preview, vc) }
                 }
                 else -> {
-                    val c = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).setJpegQuality(95).build()
-                    c.targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+                    val c = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .setJpegQuality(95)
+                        .setTargetRotation(rotation)
+                        .build()
                     capture = c
-                    recorder = null
                     val extensionMode = when (mode) {
                         CameraMode.PORTRAIT -> if (bokehAvailable) ExtensionMode.BOKEH else ExtensionMode.NONE
                         CameraMode.NIGHT -> if (nightAvailable) ExtensionMode.NIGHT else ExtensionMode.NONE
@@ -283,10 +302,22 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
         if (!faceFocus || mode == CameraMode.SLOW_MO) return@LaunchedEffect
         val target = faceTarget ?: return@LaunchedEffect
         val c = camera ?: return@LaunchedEffect
-        if (previewView.width == 0 || previewView.height == 0) return@LaunchedEffect
-        val x = target.normalizedX * previewView.width
-        val y = target.normalizedY * previewView.height
-        c.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(previewView.meteringPointFactory.createPoint(x, y)).setAutoCancelDuration(2, TimeUnit.SECONDS).build())
+        if (target.imageWidth <= 0 || target.imageHeight <= 0) return@LaunchedEffect
+        try {
+            val factory = SurfaceOrientedMeteringPointFactory(
+                target.imageWidth.toFloat(),
+                target.imageHeight.toFloat(),
+                analysis
+            )
+            val point = factory.createPoint(target.imageX, target.imageY)
+            c.cameraControl.startFocusAndMetering(
+                FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                    .setAutoCancelDuration(2, TimeUnit.SECONDS)
+                    .build()
+            )
+        } catch (t: Throwable) {
+            android.util.Log.w("CameraPro", "Face focus skipped", t)
+        }
     }
 
     LaunchedEffect(isRecording) {
@@ -298,7 +329,11 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
     }
 
     LaunchedEffect(countdown) {
-        if (countdown > 0) { delay(1000); countdown--; if (countdown == 0) capturePhoto(capture, context, mode, blurStrength, scope, onMediaCaptured) }
+        if (countdown > 0) {
+            delay(1000)
+            countdown--
+            if (countdown == 0) capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it }
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -306,7 +341,12 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             Modifier.fillMaxSize()
                 .pointerInput(camera) { detectTapGestures { p ->
                     focusPoint = p
-                    camera?.cameraControl?.startFocusAndMetering(FocusMeteringAction.Builder(previewView.meteringPointFactory.createPoint(p.x, p.y)).setAutoCancelDuration(3, TimeUnit.SECONDS).build())
+                    camera?.cameraControl?.startFocusAndMetering(
+                        FocusMeteringAction.Builder(
+                            previewView.meteringPointFactory.createPoint(p.x, p.y),
+                            FocusMeteringAction.FLAG_AF
+                        ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
+                    )
                 } }
                 .pointerInput(camera) { detectTransformGestures { _, _, factor, _ ->
                     val c = camera ?: return@detectTransformGestures
@@ -318,7 +358,26 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             AndroidView({ previewView }, Modifier.fillMaxSize())
             if (grid) GridOverlay(Modifier.fillMaxSize())
             focusPoint?.let { p -> Box(Modifier.offset { IntOffset(p.x.toInt() - 24, p.y.toInt() - 24) }.size(48.dp).border(2.dp, Color.Yellow, CircleShape)) }
-            if (faceTarget != null && faceFocus && mode != CameraMode.SLOW_MO) Box(Modifier.align(Alignment.Center).size(78.dp).border(2.dp, Color.Cyan, RoundedCornerShape(22.dp)))
+            if (faceTarget != null && faceFocus && mode != CameraMode.SLOW_MO && previewView.width > 0 && previewView.height > 0) {
+                val target = faceTarget!!
+                val imageWidth = target.imageWidth.toFloat().coerceAtLeast(1f)
+                val imageHeight = target.imageHeight.toFloat().coerceAtLeast(1f)
+                val viewWidth = previewView.width.toFloat()
+                val viewHeight = previewView.height.toFloat()
+                val scale = maxOf(viewWidth / imageWidth, viewHeight / imageHeight)
+                val renderedWidth = imageWidth * scale
+                val renderedHeight = imageHeight * scale
+                val leftCrop = (viewWidth - renderedWidth) / 2f
+                val topCrop = (viewHeight - renderedHeight) / 2f
+                var x = target.normalizedX * renderedWidth + leftCrop
+                val y = target.normalizedY * renderedHeight + topCrop
+                if (lens == CameraSelector.LENS_FACING_FRONT) x = viewWidth - x
+                Box(
+                    Modifier.offset { IntOffset(x.toInt() - 39, y.toInt() - 39) }
+                        .size(78.dp)
+                        .border(2.dp, Color.Cyan, RoundedCornerShape(22.dp))
+                )
+            }
         }
 
         Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(top = 36.dp, start = 10.dp, end = 10.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -331,11 +390,22 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
             IconButton(enabled = canSwitch && !isRecording, onClick = { lens = if (lens == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK }) { Icon(Icons.Default.Cameraswitch, null, tint = Color.White) }
         }
 
-        if (isRecording) Surface(Modifier.align(Alignment.TopCenter).padding(top = 84.dp), color = Color.Black.copy(alpha = 0.65f), shape = RoundedCornerShape(16.dp)) { Text(String.format(Locale.US, "%02d:%02d", elapsed / 60, elapsed % 60), color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)) }
+        lastCapturedUri?.let { uri ->
+            TextButton(
+                onClick = { onMediaCaptured(uri) },
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 88.dp)
+            ) { Text("OPEN", color = Color.Yellow, fontWeight = FontWeight.Bold) }
+        }
+
+        if (processing) Surface(Modifier.align(Alignment.TopCenter).padding(top = 88.dp), color = Color.Black.copy(alpha = 0.78f), shape = RoundedCornerShape(16.dp)) {
+            Text(if (mode == CameraMode.AI) "AI processing…" else "Processing…", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+        }
+
+        if (isRecording) Surface(Modifier.align(Alignment.TopCenter).padding(top = 124.dp), color = Color.Black.copy(alpha = 0.65f), shape = RoundedCornerShape(16.dp)) { Text(String.format(Locale.US, "%02d:%02d", elapsed / 60, elapsed % 60), color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)) }
 
         Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 128.dp), Arrangement.SpaceEvenly) {
             CameraMode.values().forEach { m ->
-                if (m != CameraMode.HDR || hdrAvailable) TextButton(enabled = !isRecording, onClick = { mode = m }) { Text(m.label, color = if (mode == m) Color.Yellow else Color.White.copy(alpha = 0.65f), fontWeight = if (mode == m) FontWeight.Bold else FontWeight.Normal) }
+                if (m != CameraMode.HDR || hdrAvailable) TextButton(enabled = !isRecording && !processing, onClick = { mode = m }) { Text(m.label, color = if (mode == m) Color.Yellow else Color.White.copy(alpha = 0.65f), fontWeight = if (mode == m) FontWeight.Bold else FontWeight.Normal) }
             }
         }
 
@@ -353,11 +423,13 @@ private fun CameraProContent(scope: CoroutineScope, onMediaCaptured: (String) ->
 
         Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 46.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             IconButton(onClick = { showTools = !showTools }) { Icon(Icons.Default.Settings, null, tint = Color.White) }
-            Box(Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp).background(if (isRecording) Color.Red else Color.White, if (isRecording) RoundedCornerShape(12.dp) else CircleShape).clickable(enabled = countdown == 0) {
+            Box(Modifier.size(78.dp).border(4.dp, Color.White, CircleShape).padding(8.dp).background(if (isRecording) Color.Red else Color.White, if (isRecording) RoundedCornerShape(12.dp) else CircleShape).clickable(enabled = countdown == 0 && !processing) {
                 if (mode == CameraMode.VIDEO || mode == CameraMode.SLOW_MO) {
-                    if (recording == null) startRecording(context, recorder, { recording = it; isRecording = true }, { uri -> recording = null; isRecording = false; paused = false; uri?.let(onMediaCaptured) }) else recording?.stop()
+                    if (recording == null) {
+                        startRecording(context, recorder, { recording = it; isRecording = true }, { uri -> recording = null; isRecording = false; paused = false; uri?.let { lastCapturedUri = it } })
+                    } else recording?.stop()
                 } else {
-                    if (timer > 0) countdown = timer else scope.launch { capturePhoto(capture, context, mode, blurStrength, scope, onMediaCaptured) }
+                    if (timer > 0) countdown = timer else scope.launch { capturePhoto(capture, context, mode, blurStrength, scope, { processing = it }) { lastCapturedUri = it } }
                 }
             })
             if (isRecording) IconButton(onClick = { recording?.let { if (paused) { it.resume(); paused=false } else { it.pause(); paused=true } } }) { Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, null, tint = Color.White) }
@@ -379,8 +451,21 @@ private fun startRecording(context: Context, recorder: Recorder?, onStart: (Reco
     onStart(active)
 }
 
-private suspend fun capturePhoto(capture: ImageCapture?, context: Context, mode: CameraMode, blur: Float, scope: CoroutineScope, onMediaCaptured: (String) -> Unit) {
+private suspend fun capturePhoto(
+    capture: ImageCapture?,
+    context: Context,
+    mode: CameraMode,
+    blur: Float,
+    scope: CoroutineScope,
+    onProcessingChanged: (Boolean) -> Unit,
+    onResult: (String) -> Unit
+) {
     val c = capture ?: return
+    c.targetRotation = c.targetRotation
+    val currentRotation = c.targetRotation
+    if (currentRotation != Surface.ROTATION_0 && currentRotation != Surface.ROTATION_90 && currentRotation != Surface.ROTATION_180 && currentRotation != Surface.ROTATION_270) {
+        c.targetRotation = Surface.ROTATION_0
+    }
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US).format(System.currentTimeMillis())
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -389,30 +474,81 @@ private suspend fun capturePhoto(capture: ImageCapture?, context: Context, mode:
     }
     val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
     c.takePicture(options, ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageSavedCallback {
-        override fun onError(exception: ImageCaptureException) { android.util.Log.e("CameraPro", "Photo capture failed", exception) }
+        override fun onError(exception: ImageCaptureException) {
+            android.util.Log.e("CameraPro", "Photo capture failed", exception)
+        }
         override fun onImageSaved(result: ImageCapture.OutputFileResults) {
             val uri = result.savedUri ?: return
+            if (mode == CameraMode.AI || mode == CameraMode.NIGHT || mode == CameraMode.PORTRAIT) onProcessingChanged(true)
             scope.launch(Dispatchers.Default) {
-                val finalUri = when (mode) {
-                    CameraMode.PORTRAIT -> if (blur > 0f) try { PortraitBlurProcessor.process(context, uri.toString(), blur) } catch (_: Exception) { uri.toString() } else uri.toString()
-                    CameraMode.NIGHT -> try {
-                        when (val ai = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }) {
-                            is AIResult.Success -> ai.outputUri
-                            else -> uri.toString()
-                        }
-                    } catch (_: Exception) { uri.toString() }
-                    CameraMode.AI -> try {
-                        val lowLight = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }
-                        val enhancedUri = (lowLight as? AIResult.Success)?.outputUri ?: uri.toString()
-                        val upscale = RealEsrganUpscaleEngine(context.applicationContext).process(enhancedUri, 2, { })
-                        (upscale as? AIResult.Success)?.outputUri ?: enhancedUri
-                    } catch (_: Exception) { uri.toString() }
-                    else -> uri.toString()
+                try {
+                    val finalUri = when (mode) {
+                        CameraMode.PORTRAIT -> if (blur > 0f) try { PortraitBlurProcessor.process(context, uri.toString(), blur) } catch (t: Throwable) { android.util.Log.e("CameraPro", "Portrait processing failed", t); uri.toString() } else uri.toString()
+                        CameraMode.NIGHT -> try {
+                            when (val ai = CpgaLowLightEngine(context.applicationContext).process(uri.toString()) { }) {
+                                is AIResult.Success -> ai.outputUri
+                                else -> { android.util.Log.e("CameraPro", "Night CPGA failed: $ai"); uri.toString() }
+                            }
+                        } catch (t: Throwable) { android.util.Log.e("CameraPro", "Night processing failed", t); uri.toString() }
+                        CameraMode.AI -> try {
+                            val aiInput = createAiWorkingCopy(context, uri.toString(), 1024)
+                            val lowLight = CpgaLowLightEngine(context.applicationContext).process(aiInput) { }
+                            val enhancedUri = (lowLight as? AIResult.Success)?.outputUri
+                            if (enhancedUri == null) {
+                                android.util.Log.e("CameraPro", "AI CPGA failed: $lowLight")
+                                uri.toString()
+                            } else {
+                                val upscale = RealEsrganUpscaleEngine(context.applicationContext).process(enhancedUri, 2, { })
+                                (upscale as? AIResult.Success)?.outputUri ?: run {
+                                    android.util.Log.e("CameraPro", "AI Real-ESRGAN failed: $upscale")
+                                    enhancedUri
+                                }
+                            }
+                        } catch (t: Throwable) { android.util.Log.e("CameraPro", "AI processing failed", t); uri.toString() }
+                        else -> uri.toString()
+                    }
+                    onResult(finalUri)
+                } finally {
+                    if (mode == CameraMode.AI || mode == CameraMode.NIGHT || mode == CameraMode.PORTRAIT) scope.launch { onProcessingChanged(false) }
                 }
-                onMediaCaptured(finalUri)
             }
         }
     })
+}
+
+private fun createAiWorkingCopy(context: Context, sourceUri: String, maxDimension: Int): String {
+    val appContext = context.applicationContext
+    val source = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(appContext.contentResolver, Uri.parse(sourceUri))) { decoder, _, _ ->
+            decoder.isMutableRequired = false
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        MediaStore.Images.Media.getBitmap(appContext.contentResolver, Uri.parse(sourceUri))
+    }
+
+    val largest = maxOf(source.width, source.height)
+    if (largest <= maxDimension) {
+        source.recycle()
+        return sourceUri
+    }
+
+    val scale = maxDimension.toFloat() / largest.toFloat()
+    val width = (source.width * scale).toInt().coerceAtLeast(1)
+    val height = (source.height * scale).toInt().coerceAtLeast(1)
+    val resized = Bitmap.createScaledBitmap(source, width, height, true)
+    source.recycle()
+
+    val file = File(appContext.cacheDir, "ai_input_${System.currentTimeMillis()}.jpg")
+    FileOutputStream(file).use { out ->
+        check(resized.compress(Bitmap.CompressFormat.JPEG, 95, out)) { "Failed to create AI working copy" }
+    }
+    resized.recycle()
+    return FileProvider.getUriForFile(
+        appContext,
+        "${appContext.packageName}.fileprovider",
+        file
+    ).toString()
 }
 
 @Composable
