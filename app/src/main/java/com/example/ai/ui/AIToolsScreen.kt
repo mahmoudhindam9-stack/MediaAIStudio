@@ -21,6 +21,19 @@ import com.example.ui.components.GlassSurface
 import com.example.ui.components.SectionHeader
 import kotlinx.coroutines.launch
 
+private val LOCAL_AI_MODEL_IDS = listOf(
+    "llama/inpainting_lama_2025jan",
+    "realesrgan_x2plus",
+    "cpga_fp16"
+)
+
+private fun localModelIdFor(capability: AICapability): String? = when (capability) {
+    AICapability.OBJECT_REMOVAL -> "llama/inpainting_lama_2025jan"
+    AICapability.UPSCALE -> "realesrgan_x2plus"
+    AICapability.ENHANCEMENT -> "cpga_fp16"
+    else -> null
+}
+
 @Composable
 fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val context = LocalContext.current
@@ -33,6 +46,22 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val isCloudAvailable = remember { providerManager.getProvider(AIProviderType.CLOUD).isAvailable }
 
     val models = remember(modelStates) { modelManager.getAvailableModels() }
+    val localModels = remember(models) {
+        models.filter { it.id in LOCAL_AI_MODEL_IDS }
+    }
+    val allLocalReady = localModels.size == LOCAL_AI_MODEL_IDS.size &&
+        localModels.all { it.status == ModelInstallState.READY }
+    val anyLocalBusy = localModels.any {
+        it.status == ModelInstallState.DOWNLOADING || it.status == ModelInstallState.VERIFYING
+    }
+
+    fun activateAllLocalModels() {
+        coroutineScope.launch {
+            LOCAL_AI_MODEL_IDS.forEach { id ->
+                modelManager.downloadModel(id)
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -66,6 +95,26 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
                 SectionHeader(title = "On-Device AI Models")
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = ::activateAllLocalModels,
+                    enabled = !allLocalReady && !anyLocalBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        Icons.Default.AutoFixHigh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (allLocalReady) "On-Device AI Activated" else "Activate 3 On-Device AI Tools")
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Downloads the three AI models once. They remain stored on the device across normal app updates.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             items(models.filter { it.runtime != "ML Kit" }) { model ->
@@ -205,46 +254,86 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
 
             items(tools.size) { index ->
                 val (titleRes, capability, icon) = tools[index]
-                val status = modelManager.getCapabilityStatus(capability)
+                val baseStatus = modelManager.getCapabilityStatus(capability)
+                val modelId = localModelIdFor(capability)
+                val modelState = modelId?.let { modelStates[it] }
+                val mappedStatus = when {
+                    modelState?.state == ModelInstallState.DOWNLOADING -> "Downloading ${modelState.progress}%" to MaterialTheme.colorScheme.primary
+                    modelState?.state == ModelInstallState.VERIFYING -> "Verifying..." to MaterialTheme.colorScheme.secondary
+                    modelState?.state == ModelInstallState.FAILED -> "Failed" to MaterialTheme.colorScheme.error
+                    else -> when (baseStatus) {
+                        AICapabilityStatus.AVAILABLE -> "Ready" to MaterialTheme.colorScheme.tertiary
+                        AICapabilityStatus.UNAVAILABLE -> "Unavailable" to MaterialTheme.colorScheme.error
+                        AICapabilityStatus.REQUIRES_MODEL -> "Download Required" to MaterialTheme.colorScheme.secondary
+                        AICapabilityStatus.REQUIRES_CLOUD -> "Cloud Only" to MaterialTheme.colorScheme.primary
+                        AICapabilityStatus.DEVICE_NOT_SUPPORTED -> "Not Supported" to MaterialTheme.colorScheme.error
+                        AICapabilityStatus.REQUIRES_PROVIDER -> "Setup Required" to MaterialTheme.colorScheme.error
+                        AICapabilityStatus.PROCESSING -> "Processing..." to MaterialTheme.colorScheme.primary
+                        AICapabilityStatus.FAILED -> "Failed" to MaterialTheme.colorScheme.error
+                        AICapabilityStatus.CANCELLED -> "Cancelled" to MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                }
+                val (statusText, statusColor) = mappedStatus
+                val isBusy = modelState?.state == ModelInstallState.DOWNLOADING || modelState?.state == ModelInstallState.VERIFYING
+                val canActivate = modelId != null && baseStatus == AICapabilityStatus.REQUIRES_MODEL && !isBusy
+                val actionText = if (modelState?.state == ModelInstallState.FAILED) "Retry" else "Activate"
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Text(stringResource(titleRes), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
-                        }
-
-                        val (statusText, statusColor) = when (status) {
-                            AICapabilityStatus.AVAILABLE -> "Ready" to MaterialTheme.colorScheme.tertiary
-                            AICapabilityStatus.UNAVAILABLE -> "Unavailable" to MaterialTheme.colorScheme.error
-                            AICapabilityStatus.REQUIRES_MODEL -> "Download Required" to MaterialTheme.colorScheme.secondary
-                            AICapabilityStatus.REQUIRES_CLOUD -> "Cloud Only" to MaterialTheme.colorScheme.primary
-                            AICapabilityStatus.DEVICE_NOT_SUPPORTED -> "Not Supported" to MaterialTheme.colorScheme.error
-                            AICapabilityStatus.REQUIRES_PROVIDER -> "Setup Required" to MaterialTheme.colorScheme.error
-                            AICapabilityStatus.PROCESSING -> "Processing..." to MaterialTheme.colorScheme.primary
-                            AICapabilityStatus.FAILED -> "Failed" to MaterialTheme.colorScheme.error
-                            AICapabilityStatus.CANCELLED -> "Cancelled" to MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-
-                        Surface(
-                            color = statusColor.copy(alpha = 0.2f),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                    Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = statusText,
-                                color = statusColor,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    icon,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text(
+                                    stringResource(titleRes),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+
+                            Surface(
+                                color = statusColor.copy(alpha = 0.2f),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = statusText,
+                                    color = statusColor,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        if (canActivate) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        modelManager.downloadModel(requireNotNull(modelId))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(actionText)
+                            }
                         }
                     }
                 }
