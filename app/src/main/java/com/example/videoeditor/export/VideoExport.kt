@@ -1,6 +1,10 @@
 package com.example.videoeditor.export
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -8,15 +12,19 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
-import androidx.media3.transformer.Transformer.Listener
+import com.example.videoeditor.AudioClip
 import com.example.videoeditor.VideoEditorState
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import kotlin.math.min
+
 
 data class VideoRenderItem(
     val uri: Uri,
@@ -45,18 +53,20 @@ fun VideoEditorState.toVideoRenderPlan(): List<VideoRenderItem> =
 
 @OptIn(UnstableApi::class)
 class VideoExport(private val context: Context) {
-
     fun export(
         state: VideoEditorState,
-        outputFilePath: String,
         onProgress: (Int) -> Unit,
-        onSuccess: () -> Unit,
+        onSuccess: (Uri) -> Unit,
         onError: (Exception) -> Unit
     ) {
         val temporaryFiles = mutableListOf<File>()
         try {
+            require(state.durationMs > 0L) { "Cannot export an empty timeline" }
             val renderPlan = state.toVideoRenderPlan()
-            validateRenderPlan(renderPlan)
+            validateRenderPlan(renderPlan, state.durationMs)
+
+            val outputFile = File(context.cacheDir, "mediaai_export_${System.currentTimeMillis()}.mp4")
+            temporaryFiles += outputFile
             onProgress(0)
 
             val videoItems = renderPlan.map { item ->
@@ -74,12 +84,21 @@ class VideoExport(private val context: Context) {
 
                 val editedBuilder = EditedMediaItem.Builder(mediaBuilder.build())
                 if (item.isImage) editedBuilder.setFrameRate(30)
-                if (!item.isImage && item.muted) editedBuilder.setRemoveAudio(true)
+                if (item.muted || item.volume < 1f) {
+                    if (item.muted) {
+                        editedBuilder.setRemoveAudio(true)
+                    } else if (!item.isImage) {
+                        editedBuilder.setEffects(
+                            Effects(
+                                listOf(FadeGainAudioProcessor(item.volume, item.trimEndMs - item.trimStartMs, 0L, 0L)),
+                                emptyList()
+                            )
+                        )
+                    }
+                }
                 editedBuilder.build()
             }
 
-            // Media3 mixes concurrent audio sequences in a Composition. The first sequence is the
-            // ordered video timeline; every additional sequence is one independent audio track.
             val sequences = mutableListOf(EditedMediaItemSequence(videoItems))
             val silenceLibrary = if (state.audioTracks.any { it.startTimeMs > 0L && !it.isMuted }) {
                 createSilenceLibrary().also { temporaryFiles += it.allFiles }
@@ -103,6 +122,7 @@ class VideoExport(private val context: Context) {
                 val sourceStart = track.startTrimMs.coerceIn(0L, track.originalDurationMs)
                 val sourceEnd = (sourceStart + availableDuration).coerceAtMost(track.originalDurationMs)
                 if (sourceEnd <= sourceStart) return@forEach
+                val actualDuration = sourceEnd - sourceStart
 
                 val audioItem = MediaItem.Builder()
                     .setUri(Uri.parse(track.uri))
@@ -113,17 +133,43 @@ class VideoExport(private val context: Context) {
                             .build()
                     )
                     .build()
-                items += EditedMediaItem.Builder(audioItem).build()
+                val processors = if (
+                    track.volume != 1f || track.fadeInDurationMs > 0L || track.fadeOutDurationMs > 0L
+                ) {
+                    listOf(
+                        FadeGainAudioProcessor(
+                            volume = track.volume,
+                            durationMs = actualDuration,
+                            fadeInDurationMs = track.fadeInDurationMs.coerceAtMost(actualDuration),
+                            fadeOutDurationMs = track.fadeOutDurationMs.coerceAtMost(actualDuration)
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+                items += EditedMediaItem.Builder(audioItem)
+                    .apply {
+                        if (processors.isNotEmpty()) {
+                            setEffects(Effects(processors, emptyList()))
+                        }
+                    }
+                    .build()
                 sequences += EditedMediaItemSequence(items)
             }
 
             val composition = Composition.Builder(sequences).build()
             val transformer = Transformer.Builder(context)
-                .addListener(object : Listener {
+                .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        cleanup(temporaryFiles)
-                        onProgress(100)
-                        onSuccess()
+                        try {
+                            val publishedUri = publishToMediaStore(outputFile)
+                            cleanup(temporaryFiles)
+                            onProgress(100)
+                            onSuccess(publishedUri)
+                        } catch (e: Exception) {
+                            cleanup(temporaryFiles)
+                            onError(e)
+                        }
                     }
 
                     override fun onError(
@@ -137,14 +183,28 @@ class VideoExport(private val context: Context) {
                 })
                 .build()
 
-            transformer.start(composition, outputFilePath)
+            transformer.start(composition, outputFile.absolutePath)
+            pollProgress(transformer, onProgress)
         } catch (e: Exception) {
             cleanup(temporaryFiles)
             onError(e)
         }
     }
 
-    private fun validateRenderPlan(plan: List<VideoRenderItem>) {
+    private fun pollProgress(transformer: Transformer, onProgress: (Int) -> Unit) {
+        val handler = android.os.Handler(transformer.applicationLooper)
+        val holder = ProgressHolder()
+        val runnable = object : Runnable {
+            override fun run() {
+                val state = runCatching { transformer.getProgress(holder) }.getOrNull()
+                if (state == Transformer.PROGRESS_STATE_AVAILABLE) onProgress(holder.progress)
+                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) handler.postDelayed(this, 250L)
+            }
+        }
+        handler.post(runnable)
+    }
+
+    private fun validateRenderPlan(plan: List<VideoRenderItem>, projectDurationMs: Long) {
         require(plan.isNotEmpty()) { "Cannot export an empty video timeline" }
         var expectedStart = 0L
         plan.forEachIndexed { index, item ->
@@ -156,6 +216,63 @@ class VideoExport(private val context: Context) {
             require(item.volume in 0f..1f) { "Clip $index has invalid volume" }
             expectedStart += item.trimEndMs - item.trimStartMs
         }
+        require(expectedStart == projectDurationMs) {
+            "Video timeline duration mismatch: expected $projectDurationMs, got $expectedStart"
+        }
+    }
+
+    private fun publishToMediaStore(source: File): Uri {
+        require(source.isFile && source.length() > 0L) { "Export produced no output file" }
+        val resolver = context.contentResolver
+        val displayName = "MediaAIStudio_${System.currentTimeMillis()}.mp4"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/MediaAIStudio")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw IOException("MediaStore refused the export destination")
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    source.inputStream().use { input -> input.copyTo(output) }
+                } ?: throw IOException("Could not open MediaStore output stream")
+                val ready = ContentValues().apply {
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                }
+                resolver.update(uri, ready, null, null)
+                return uri
+            } catch (e: Exception) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw e
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+            "MediaAIStudio"
+        )
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IOException("Could not create Movies/MediaAIStudio")
+        }
+        val destination = File(directory, displayName)
+        source.inputStream().use { input -> destination.outputStream().use { input.copyTo(it) } }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.TITLE, displayName.removeSuffix(".mp4"))
+            put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            @Suppress("DEPRECATION")
+            put(MediaStore.Video.Media.DATA, destination.absolutePath)
+        }
+        return resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            ?: run {
+                destination.delete()
+                throw IOException("MediaStore refused the legacy export destination")
+            }
     }
 
     private data class SilenceLibrary(

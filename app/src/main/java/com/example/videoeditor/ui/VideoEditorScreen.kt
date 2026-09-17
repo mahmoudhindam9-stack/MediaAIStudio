@@ -15,7 +15,6 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
@@ -24,7 +23,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -284,14 +282,11 @@ fun VideoEditorScreen(
                         Icon(Icons.AutoMirrored.Filled.Redo, "Redo", tint = MaterialTheme.colorScheme.onBackground)
                     }
                     TextButton(onClick = {
-                        val exporter = com.example.videoeditor.export.VideoExport(context)
-                        val outPath = java.io.File(context.cacheDir, "export_${System.currentTimeMillis()}.mp4").absolutePath
-                        exporter.export(
+                        com.example.videoeditor.export.VideoExport(context).export(
                             state = state,
-                            outputFilePath = outPath,
-                            onProgress = {},
-                            onSuccess = { onExported(outPath) },
-                            onError = { error -> coroutineScope.launch { snackbarHostState.showSnackbar(error) } }
+                            onProgress = { },
+                            onSuccess = { uri -> onExported(uri.toString()) },
+                            onError = { error -> coroutineScope.launch { snackbarHostState.showSnackbar(error.message ?: error.toString()) } }
                         )
                     }) { Text("Export", color = MaterialTheme.colorScheme.secondary) }
                 }
@@ -427,27 +422,14 @@ fun EditorToolbar(
                 tint = if (selectedTimelineItem != null) MaterialTheme.colorScheme.onBackground else Color.Gray
             )
         }
-        IconButton(enabled = selectedIsVideo, onClick = { viewModel.moveSelectedClipLeft() }) {
-            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Move left", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
-        }
-        IconButton(enabled = selectedIsVideo, onClick = { viewModel.moveSelectedClipRight() }) {
-            Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Move right", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
-        }
-        IconButton(enabled = selectedIsVideo, onClick = { viewModel.splitSelectedClip() }) {
-            Icon(Icons.Default.ContentCut, contentDescription = "Split", tint = if (selectedIsVideo) MaterialTheme.colorScheme.onBackground else Color.Gray)
-        }
         IconButton(enabled = selectedTimelineItem != null, onClick = { viewModel.deleteSelectedClip() }) {
             Icon(Icons.Default.Delete, contentDescription = "Delete", tint = if (selectedTimelineItem != null) MaterialTheme.colorScheme.onBackground else Color.Gray)
         }
-        IconButton(onClick = onAiClick) {
-            Icon(Icons.Default.AutoAwesome, contentDescription = "AI Tools", tint = MaterialTheme.colorScheme.secondary)
-        }
         IconButton(onClick = onRecordVoiceOver) {
-            Icon(
-                if (viewModel.isRecordingVoiceOver) Icons.Default.Stop else Icons.Default.Mic,
-                contentDescription = "Voice Over",
-                tint = if (viewModel.isRecordingVoiceOver) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground
-            )
+            Icon(Icons.Default.Mic, contentDescription = "Voice over", tint = MaterialTheme.colorScheme.onBackground)
+        }
+        IconButton(onClick = onAiClick) {
+            Icon(Icons.Default.AutoAwesome, contentDescription = "AI", tint = MaterialTheme.colorScheme.secondary)
         }
     }
 }
@@ -459,100 +441,94 @@ fun TimelineView(
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scrollState = rememberScrollState()
     val density = LocalDensity.current
-    val scale = 1f / 100f // 1dp = 100ms
+    val scrollState = rememberScrollState()
 
-    Box(modifier = modifier) {
-        Column(
+    Column(modifier = modifier.padding(8.dp)) {
+        Row(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .horizontalScroll(scrollState)
-                .padding(vertical = 16.dp)
-                .pointerInput(state.durationMs) {
-                    detectTapGestures { offset ->
-                        val timelineDp = (offset.x + scrollState.value) / density.density
-                        val positionMs = (timelineDp / scale).toLong().coerceIn(0L, state.durationMs)
-                        onSeek(positionMs)
-                    }
-                }
+                .height(80.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .width(maxOf(1f, state.durationMs * scale).dp)
-                    .height(60.dp)
-                    .padding(bottom = 4.dp)
-            ) {
-                state.videoClips.forEach { clip ->
-                    val widthDp = maxOf(8f, clip.durationMs * scale).dp
-                    Box(
-                        modifier = Modifier
-                            .width(widthDp)
-                            .fillMaxHeight()
-                            .background(
-                                if (state.selectedItemId == clip.id) MaterialTheme.colorScheme.secondary
-                                else MaterialTheme.colorScheme.primary
-                            )
-                            .clickable { onItemSelect(clip.id) }
-                            .padding(2.dp)
-                    ) {
-                        Text(
-                            text = "Video",
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-
-            state.audioTracks.forEach { audio ->
-                val widthDp = maxOf(8f, audio.durationMs * scale).dp
-                val startDp = (audio.startTimeMs * scale).dp
+            state.videoClips.forEach { clip ->
+                val width = with(density) { maxOf(70.dp, (clip.durationMs / 1000f * 70f).dp) }
                 Box(
                     modifier = Modifier
-                        .width(maxOf(1f, state.durationMs * scale).dp)
-                        .height(40.dp)
-                        .padding(bottom = 4.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .offset(x = startDp)
-                            .width(widthDp)
-                            .fillMaxHeight()
-                            .background(
-                                if (state.selectedItemId == audio.id) MaterialTheme.colorScheme.secondary
-                                else MaterialTheme.colorScheme.tertiary
-                            )
-                            .clickable { onItemSelect(audio.id) }
-                            .padding(2.dp)
-                    ) {
-                        Text(
-                            audio.type.name,
-                            color = MaterialTheme.colorScheme.onTertiary,
-                            fontSize = 10.sp,
-                            maxLines = 1
+                        .width(width)
+                        .fillMaxHeight()
+                        .padding(end = 4.dp)
+                        .background(
+                            if (clip.id == state.selectedItemId) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                            else MaterialTheme.colorScheme.surfaceVariant
                         )
-                    }
+                        .clickable { onItemSelect(clip.id) }
+                        .pointerInput(clip.id) {
+                            detectTapGestures(
+                                onTap = { onItemSelect(clip.id) },
+                                onLongPress = { onItemSelect(clip.id) }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (clip.isImage) "Image" else "Video",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 12.sp
+                    )
                 }
             }
         }
 
-        val playheadOffset = (state.playheadMs * scale).dp - with(density) { scrollState.value.toDp() }
-        Box(
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
             modifier = Modifier
-                .offset(x = playheadOffset.coerceAtLeast(0.dp))
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.error)
-        )
+                .fillMaxWidth()
+                .horizontalScroll(scrollState)
+        ) {
+            state.audioTracks.forEach { track ->
+                val width = with(density) { maxOf(70.dp, (track.durationMs / 1000f * 70f).dp) }
+                Spacer(modifier = Modifier.width(with(density) { (track.startTimeMs / 1000f * 70f).dp }))
+                Box(
+                    modifier = Modifier
+                        .width(width)
+                        .height(46.dp)
+                        .padding(end = 4.dp)
+                        .background(
+                            if (track.id == state.selectedItemId) MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                        )
+                        .clickable { onItemSelect(track.id) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Audio", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { onSeek((state.playheadMs - 1000L).coerceAtLeast(0L)) }) {
+                Icon(Icons.Default.KeyboardArrowLeft, "Previous second")
+            }
+            Text("${formatTime(state.playheadMs)} / ${formatTime(state.durationMs)}")
+            IconButton(onClick = { onSeek((state.playheadMs + 1000L).coerceAtMost(state.durationMs)) }) {
+                Icon(Icons.Default.KeyboardArrowRight, "Next second")
+            }
+        }
     }
 }
 
-fun formatTime(ms: Long): String {
-    val totalSeconds = (ms / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return String.format("%02d:%02d", minutes, seconds)
+private fun formatTime(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%02d:%02d".format(minutes, seconds)
 }
