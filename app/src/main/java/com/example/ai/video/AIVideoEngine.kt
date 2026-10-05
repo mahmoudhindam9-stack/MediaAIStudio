@@ -1,7 +1,7 @@
 package com.example.ai.video
 import android.content.Context
 
-class AIVideoEngine(private val context: Context) {
+class AIVideoEngine(private val context: Context) : AutoCloseable {
     val tracking = ObjectTrackingEngine(context)
     val smartReframe = SmartReframeEngine(context, tracking)
     val smartCut = SmartCutEngine(context)
