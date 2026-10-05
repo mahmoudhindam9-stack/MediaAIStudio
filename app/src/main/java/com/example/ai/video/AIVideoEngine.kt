@@ -7,4 +7,6 @@ class AIVideoEngine(private val context: Context) : AutoCloseable {
     val smartCut = SmartCutEngine(context)
     val autoCaption = AutoCaptionEngine(context)
     val enhancement = VideoEnhancementEngine(context)
+
+    override fun close() { tracking.close() }
 }
