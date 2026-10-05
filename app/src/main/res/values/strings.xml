@@ -33,6 +33,7 @@
     <string name="editor_crop">Crop</string>
     <string name="editor_text">Text</string>
     <string name="editor_draw">Draw</string>
+    <string name="editor_object_removal">Remove Object</string>
     <string name="editor_sticker">Sticker</string>
     <string name="editor_brightness">Brightness</string>
     <string name="editor_contrast">Contrast</string>

@@ -190,19 +190,33 @@ fun PhotoEditorScreen(
                                         viewModel.commitState()
                                     }
                                 )
-                            } else if (currentTab == "DRAW") {
+                            } else if (currentTab == "DRAW" || currentTab == "REMOVE") {
                                 detectDragGestures(
                                     onDragStart = { offset ->
-                                        val x = offset.x / renderWidth
-                                        val y = offset.y / renderHeight
-                                        viewModel.startDrawing(PointF(x, y))
+                                        val x = (offset.x / renderWidth).coerceIn(0f, 1f)
+                                        val y = (offset.y / renderHeight).coerceIn(0f, 1f)
+                                        if (currentTab == "REMOVE") {
+                                            viewModel.startObjectRemoval(PointF(x, y))
+                                        } else {
+                                            viewModel.startDrawing(PointF(x, y))
+                                        }
                                     },
                                     onDrag = { change, _ ->
-                                        val x = change.position.x / renderWidth
-                                        val y = change.position.y / renderHeight
-                                        viewModel.addDrawingPoint(PointF(x, y))
+                                        val x = (change.position.x / renderWidth).coerceIn(0f, 1f)
+                                        val y = (change.position.y / renderHeight).coerceIn(0f, 1f)
+                                        if (currentTab == "REMOVE") {
+                                            viewModel.addObjectRemovalPoint(PointF(x, y))
+                                        } else {
+                                            viewModel.addDrawingPoint(PointF(x, y))
+                                        }
                                     },
-                                    onDragEnd = { viewModel.endDrawing() }
+                                    onDragEnd = {
+                                        if (currentTab == "REMOVE") {
+                                            viewModel.endObjectRemoval()
+                                        } else {
+                                            viewModel.endDrawing()
+                                        }
+                                    }
                                 )
                             }
                         }) {
@@ -245,6 +259,23 @@ fun PhotoEditorScreen(
                                     color = Color(drawing.color),
                                     style = Stroke(width = drawing.strokeWidth * contentW)
                                 )
+                            }
+
+                            for (stroke in state.objectRemovalStrokes) {
+                                val path = androidx.compose.ui.graphics.Path()
+                                if (stroke.path.isNotEmpty()) {
+                                    val start = stroke.path.first()
+                                    path.moveTo(contentOffsetX + start.x * contentW, contentOffsetY + start.y * contentH)
+                                    for (i in 1 until stroke.path.size) {
+                                        val p = stroke.path[i]
+                                        path.lineTo(contentOffsetX + p.x * contentW, contentOffsetY + p.y * contentH)
+                                    }
+                                    drawPath(
+                                        path = path,
+                                        color = Color.Red.copy(alpha = 0.55f),
+                                        style = Stroke(width = (stroke.strokeWidth * contentW).coerceAtLeast(2.dp.toPx()))
+                                    )
+                                }
                             }
                             
                             if (isCropMode) {
@@ -429,6 +460,47 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                 "DRAW" -> {
                     Text("Drag on image to draw", color = Color.White)
                 }
+                "REMOVE" -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                    ) {
+                        Text("Paint over the object you want to remove", color = Color.White, fontSize = 12.sp)
+                        Slider(
+                            value = state.objectRemovalBrushSize,
+                            onValueChange = { value ->
+                                viewModel.updateState { it.copy(objectRemovalBrushSize = value) }
+                            },
+                            onValueChangeFinished = { viewModel.commitState() },
+                            valueRange = 0.015f..0.12f,
+                            modifier = Modifier.fillMaxWidth(0.55f)
+                        )
+                        Row(horizontalArrangement = Arrangement.Center) {
+                            Button(
+                                onClick = { viewModel.clearObjectRemoval() },
+                                enabled = state.objectRemovalStrokes.isNotEmpty(),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                Text("Clear mask")
+                            }
+                            Button(
+                                onClick = {
+                                    val mask = viewModel.buildObjectRemovalMaskData()
+                                    if (mask != null) {
+                                        viewModel.processAITool(
+                                            AIRequest.ObjectRemoval(state.uriString, mask)
+                                        )
+                                        onTabSelected("AI")
+                                    }
+                                },
+                                enabled = state.objectRemovalStrokes.isNotEmpty(),
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            ) {
+                                Text("Remove Object")
+                            }
+                        }
+                    }
+                }
                 "STICKER" -> {
                     LazyRow {
                         items(listOf("😀", "❤️", "🔥", "🌟", "🎉", "✨", "😎", "🐱")) { emoji ->
@@ -466,6 +538,14 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                             item {
                                 Button(onClick = { viewModel.processAITool(AIRequest.BackgroundRemoval(state.uriString)) }, modifier = Modifier.padding(4.dp)) {
                                     Text(stringResource(R.string.ai_background_removal))
+                                }
+                            }
+                            item {
+                                Button(
+                                    onClick = { onTabSelected("REMOVE") },
+                                    modifier = Modifier.padding(4.dp)
+                                ) {
+                                    Text(stringResource(R.string.ai_object_removal))
                                 }
                             }
                             item {
@@ -528,7 +608,7 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
         }
         
         ScrollableTabRow(
-            selectedTabIndex = listOf("ADJUST", "FILTERS", "CROP", "TEXT", "DRAW", "STICKER", "AI").indexOf(currentTab),
+            selectedTabIndex = listOf("ADJUST", "FILTERS", "CROP", "TEXT", "DRAW", "REMOVE", "STICKER", "AI").indexOf(currentTab),
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = MaterialTheme.colorScheme.onBackground,
             edgePadding = 8.dp
@@ -539,6 +619,7 @@ fun EditorBottomBar(currentTab: String, onTabSelected: (String) -> Unit, viewMod
                 "CROP" to R.string.editor_crop,
                 "TEXT" to R.string.editor_text,
                 "DRAW" to R.string.editor_draw,
+                "REMOVE" to R.string.editor_object_removal,
                 "STICKER" to R.string.editor_sticker,
                 "AI" to R.string.ai_tools
             )
