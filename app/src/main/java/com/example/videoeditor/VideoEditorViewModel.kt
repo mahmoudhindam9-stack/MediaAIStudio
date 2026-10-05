@@ -793,6 +793,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     override fun onCleared() {
         exoPlayer.removeListener(playerListener)
         exoPlayer.release()
+        generativeEngine.close()
         super.onCleared()
     }
 }
