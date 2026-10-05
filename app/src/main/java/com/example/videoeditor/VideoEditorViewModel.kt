@@ -756,8 +756,18 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             _aiMessages.emit(getApplication<Application>().getString(com.example.R.string.ai_msg_enhancing))
             when (val result = aiEngine.enhancement.enhance(uri)) {
+                is VideoAnalysisResult.Enhancement -> {
+                    updateState(
+                        _state.value.copy(
+                            aiEnhancementSuggestion = result.suggestion
+                        )
+                    )
+                    commitState()
+                    val confidence = (result.suggestion.confidence * 100f).toInt()
+                    _aiMessages.emit("Enhancement analysis ready — confidence ${confidence}%")
+                }
                 is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
-                else -> _aiMessages.emit("Video enhancement is unavailable on this device/backend.")
+                else -> Unit
             }
         }
     }
