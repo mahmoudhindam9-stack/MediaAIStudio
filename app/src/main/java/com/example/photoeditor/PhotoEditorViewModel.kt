@@ -114,11 +114,11 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
         commitState()
     }
 
-    fun startObjectRemoval(startPoint: PointF, brushSize: Float = 0.045f) {
+    fun startObjectRemoval(startPoint: PointF) {
         val stroke = Drawing(
             path = listOf(startPoint),
             color = Color.RED,
-            strokeWidth = brushSize.coerceIn(0.01f, 0.15f)
+            strokeWidth = state.value.objectRemovalBrushSize.coerceIn(0.01f, 0.15f)
         )
         updateState { it.copy(objectRemovalStrokes = it.objectRemovalStrokes + stroke) }
     }
