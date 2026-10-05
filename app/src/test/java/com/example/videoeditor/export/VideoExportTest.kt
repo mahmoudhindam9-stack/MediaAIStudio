@@ -197,6 +197,20 @@ class VideoExportTest {
     }
 
     @Test
+    fun videoEnhancementMatrix_clampsRequestedAdjustments() {
+        val matrix = buildVideoEnhancementMatrix(
+            brightness = 0.5f,
+            contrast = 0.5f,
+            saturation = 0.5f
+        )
+
+        assertEquals(1.3f, matrix[0] + matrix[1] + matrix[2], 0.0001f)
+        assertEquals(0.3f, matrix[3], 0.0001f)
+        assertEquals(0f, matrix[12], 0.0001f)
+        assertEquals(1f, matrix[15], 0.0001f)
+    }
+
+    @Test
     fun exactSilenceOffset_usesSamplePreciseWholeMilliseconds() {
         assertEquals(48L, silenceFrameCount(1L))
         assertEquals(816L, silenceFrameCount(17L))

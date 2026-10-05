@@ -24,6 +24,8 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.effect.MatrixTransformation
+import androidx.media3.effect.RgbMatrix
+import androidx.media3.effect.GaussianBlurWithFrameOverlaid
 import androidx.media3.common.util.Size
 import com.example.videoeditor.AudioClip
 import com.example.videoeditor.VideoEditorState
@@ -65,6 +67,62 @@ fun VideoEditorState.toVideoRenderPlan(): List<VideoRenderItem> =
             isImage = clip.isImage
         )
     }
+
+internal fun buildVideoEnhancementMatrix(
+    brightness: Float,
+    contrast: Float,
+    saturation: Float
+): FloatArray {
+    val b = brightness.coerceIn(-0.30f, 0.30f)
+    val c = (1f + contrast.coerceIn(-0.30f, 0.30f)).coerceIn(0.70f, 1.30f)
+    val s = (1f + saturation.coerceIn(-0.25f, 0.25f)).coerceIn(0.75f, 1.25f)
+
+    val lumR = 0.2126f
+    val lumG = 0.7152f
+    val lumB = 0.0722f
+    val sr = (1f - s) * lumR
+    val sg = (1f - s) * lumG
+    val sb = (1f - s) * lumB
+
+    return floatArrayOf(
+        c * (sr + s), c * sg, c * sb, b,
+        c * sr, c * (sg + s), c * sb, b,
+        c * sr, c * sg, c * (sb + s), b,
+        0f, 0f, 0f, 1f
+    )
+}
+
+private fun createEnhancementEffects(
+    suggestion: com.example.ai.video.VideoEnhancementSuggestion
+): List<Effect> {
+    val effects = mutableListOf<Effect>()
+    if (
+        suggestion.brightness != 0f ||
+        suggestion.contrast != 0f ||
+        suggestion.saturation != 0f
+    ) {
+        val matrix = buildVideoEnhancementMatrix(
+            suggestion.brightness,
+            suggestion.contrast,
+            suggestion.saturation
+        )
+        effects += object : RgbMatrix {
+            override fun getMatrix(
+                presentationTimeUs: Long,
+                useHdr: Boolean
+            ): FloatArray = matrix
+        }
+    }
+
+    if (suggestion.sharpness >= 0.12f) {
+        effects += GaussianBlurWithFrameOverlaid(
+            /* sigma= */ 1f,
+            /* scaleSharpX= */ 1f,
+            /* scaleSharpY= */ 1f
+        )
+    }
+    return effects
+}
 
 internal fun interpolateReframeKeyframe(
     keyframes: List<com.example.videoeditor.ReframeKeyframe>,
@@ -232,6 +290,12 @@ class VideoExport(private val context: Context) {
             val canApplySmartReframe =
                 state.videoClips.size == 1 &&
                     state.aiReframeKeyframes?.isNotEmpty() == true &&
+                    renderPlan.size == 1 &&
+                    !renderPlan.first().isImage
+
+            val canApplyEnhancement =
+                state.videoClips.size == 1 &&
+                    state.aiEnhancementSuggestion != null &&
                     renderPlan.size == 1 &&
                     !renderPlan.first().isImage
 
