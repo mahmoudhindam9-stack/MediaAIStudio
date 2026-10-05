@@ -22,6 +22,23 @@ android {
     versionName = "1.6.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val backendUrl = (
+      System.getenv("MEDIA_AI_BACKEND_URL")
+        ?: project.findProperty("MEDIA_AI_BACKEND_URL")?.toString()
+        ?: ""
+      ).trim().trimEnd('/')
+    val backendApiKey = (
+      System.getenv("MEDIA_AI_BACKEND_API_KEY")
+        ?: project.findProperty("MEDIA_AI_BACKEND_API_KEY")?.toString()
+        ?: ""
+      ).trim()
+
+    fun buildConfigString(value: String): String =
+      """ + value.replace("\\", "\\\\").replace(""", "\"") + """
+
+    buildConfigField("String", "MEDIA_AI_BACKEND_URL", buildConfigString(backendUrl))
+    buildConfigField("String", "MEDIA_AI_BACKEND_API_KEY", buildConfigString(backendApiKey))
   }
 
   signingConfigs {
