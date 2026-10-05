@@ -4,10 +4,16 @@ import kotlinx.coroutines.flow.first
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Base64
+import java.io.ByteArrayOutputStream
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +112,84 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
 
     fun endDrawing() {
         commitState()
+    }
+
+    fun startObjectRemoval(startPoint: PointF, brushSize: Float = 0.045f) {
+        val stroke = Drawing(
+            path = listOf(startPoint),
+            color = Color.RED,
+            strokeWidth = brushSize.coerceIn(0.01f, 0.15f)
+        )
+        updateState { it.copy(objectRemovalStrokes = it.objectRemovalStrokes + stroke) }
+    }
+
+    fun addObjectRemovalPoint(point: PointF) {
+        val strokes = state.value.objectRemovalStrokes.toMutableList()
+        if (strokes.isNotEmpty()) {
+            val last = strokes.last()
+            strokes[strokes.lastIndex] = last.copy(path = last.path + point)
+            state.value = state.value.copy(objectRemovalStrokes = strokes)
+        }
+    }
+
+    fun endObjectRemoval() {
+        commitState()
+    }
+
+    fun clearObjectRemoval() {
+        if (state.value.objectRemovalStrokes.isEmpty()) return
+        updateState { it.copy(objectRemovalStrokes = emptyList()) }
+        commitState()
+    }
+
+    fun buildObjectRemovalMaskData(size: Int = 512): String? {
+        val strokes = state.value.objectRemovalStrokes
+        if (strokes.isEmpty()) return null
+
+        val safeSize = size.coerceIn(128, 1024)
+        val bitmap = Bitmap.createBitmap(safeSize, safeSize, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(Color.BLACK)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+            }
+
+            strokes.forEach { stroke ->
+                if (stroke.path.isEmpty()) return@forEach
+                paint.strokeWidth = (stroke.strokeWidth * safeSize).coerceAtLeast(1f)
+                if (stroke.path.size == 1) {
+                    val point = stroke.path.first()
+                    paint.style = Paint.Style.FILL
+                    canvas.drawCircle(
+                        point.x.coerceIn(0f, 1f) * safeSize,
+                        point.y.coerceIn(0f, 1f) * safeSize,
+                        paint.strokeWidth / 2f,
+                        paint
+                    )
+                    paint.style = Paint.Style.STROKE
+                } else {
+                    val path = Path()
+                    stroke.path.forEachIndexed { index, point ->
+                        val x = point.x.coerceIn(0f, 1f) * safeSize
+                        val y = point.y.coerceIn(0f, 1f) * safeSize
+                        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+
+            val output = ByteArrayOutputStream()
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                "Failed to encode object-removal mask"
+            }
+            return "mask_png_base64:" + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     fun addText(text: String) {
