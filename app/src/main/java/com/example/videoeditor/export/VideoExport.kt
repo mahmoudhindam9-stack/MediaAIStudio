@@ -163,21 +163,22 @@ class VideoExport(private val context: Context) {
                 }
 
                 val editedBuilder = EditedMediaItem.Builder(mediaBuilder.build())
-                if (item.isImage) {
-                    editedBuilder.setFrameRate(30)
-                    editedBuilder.setEffects(
-                        audioEffects(
-                            volume = item.volume,
-                            durationMs = item.trimEndMs - item.trimStartMs,
-                            fadeInDurationMs = 0L,
-                            fadeOutDurationMs = 0L,
-                            videoEffects = videoEffectsFor(item, state)
-                        )
+                if (item.isImage) editedBuilder.setFrameRate(30)
+                if (item.muted) editedBuilder.setRemoveAudio(true)
+
+                val videoEffects = videoEffectsFor(item, state)
+                val effects = if (!item.isImage && !item.muted) {
+                    audioEffects(
+                        volume = item.volume,
+                        durationMs = item.trimEndMs - item.trimStartMs,
+                        fadeInDurationMs = 0L,
+                        fadeOutDurationMs = 0L,
+                        videoEffects = videoEffects
                     )
-                            fadeOutDurationMs = 0L
-                        )
-                    )
+                } else {
+                    Effects(emptyList(), videoEffects)
                 }
+                editedBuilder.setEffects(effects)
                 editedBuilder.build()
             }
 
