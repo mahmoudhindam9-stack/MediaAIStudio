@@ -4,7 +4,7 @@ import android.content.Context
 import com.example.ai.core.AIProviderType
 
 class AIProviderManager(context: Context) {
-    private val providers = listOf(OnDeviceAIProvider(context), CloudAIProvider())
+    private val providers = listOf(OnDeviceAIProvider(context), CloudAIProvider(context))
 
     fun getProvider(type: AIProviderType): AIProvider {
         if (type == AIProviderType.AUTO) {
