@@ -2,6 +2,7 @@ package com.example.ai.image.inpainting
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
@@ -9,6 +10,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
+import android.util.Base64
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import ai.onnxruntime.OnnxTensor
@@ -171,10 +173,31 @@ class LaMaInpaintingEngine(context: Context) {
     }
 
     private fun prepareMask(maskData: String): FloatArray {
-        val mask = Bitmap.createBitmap(MODEL_WIDTH, MODEL_HEIGHT, Bitmap.Config.ALPHA_8)
-        Canvas(mask).apply {
-            drawColor(Color.BLACK)
-            if (maskData.isNotBlank() && maskData.startsWith("[")) {
+        val mask = Bitmap.createBitmap(MODEL_WIDTH, MODEL_HEIGHT, Bitmap.Config.ARGB_8888)
+        try {
+            Canvas(mask).drawColor(Color.BLACK)
+
+            if (maskData.startsWith("mask_png_base64:", ignoreCase = true)) {
+                val encoded = maskData.substringAfter(':').trim()
+                require(encoded.isNotEmpty()) { "EMPTY_MASK" }
+                val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IllegalArgumentException("INVALID_MASK_IMAGE")
+                try {
+                    val scaled = if (decoded.width == MODEL_WIDTH && decoded.height == MODEL_HEIGHT) {
+                        decoded
+                    } else {
+                        Bitmap.createScaledBitmap(decoded, MODEL_WIDTH, MODEL_HEIGHT, true)
+                    }
+                    try {
+                        Canvas(mask).drawBitmap(scaled, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG))
+                    } finally {
+                        if (scaled !== decoded) scaled.recycle()
+                    }
+                } finally {
+                    decoded.recycle()
+                }
+            } else if (maskData.isNotBlank() && maskData.startsWith("[")) {
                 val parts = maskData.removeSurrounding("[", "]").split(',')
                 if (parts.size == 4) {
                     val left = parts[0].toFloatOrNull() ?: 0f
@@ -185,7 +208,7 @@ class LaMaInpaintingEngine(context: Context) {
                         color = Color.WHITE
                         style = Paint.Style.FILL
                     }
-                    drawRect(
+                    Canvas(mask).drawRect(
                         RectF(
                             left.coerceIn(0f, 1f) * MODEL_WIDTH,
                             top.coerceIn(0f, 1f) * MODEL_HEIGHT,
@@ -196,15 +219,17 @@ class LaMaInpaintingEngine(context: Context) {
                     )
                 }
             }
+
+            val pixels = IntArray(MODEL_WIDTH * MODEL_HEIGHT)
+            mask.getPixels(pixels, 0, MODEL_WIDTH, 0, 0, MODEL_WIDTH, MODEL_HEIGHT)
+            val out = FloatArray(pixels.size)
+            for (i in pixels.indices) {
+                out[i] = Color.red(pixels[i]) / 255f
+            }
+            return out
+        } finally {
+            mask.recycle()
         }
-        val alpha = ByteArray(MODEL_WIDTH * MODEL_HEIGHT)
-        mask.copyPixelsToBuffer(java.nio.ByteBuffer.wrap(alpha))
-        mask.recycle()
-        val out = FloatArray(alpha.size)
-        for (i in alpha.indices) {
-            out[i] = (alpha[i].toInt() and 0xFF) / 255f
-        }
-        return out
     }
 
     private fun outputToBitmap(values: FloatArray, width: Int, height: Int): Bitmap {
