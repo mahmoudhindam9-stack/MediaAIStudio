@@ -3,6 +3,7 @@ package com.example.photoeditor
 import kotlinx.coroutines.flow.first
 
 import android.app.Application
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -14,6 +15,7 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -334,10 +336,79 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun acceptAiResult() {
-        previewAiResultUri.value?.let { 
-            setUri(it)
-            previewAiResultUri.value = null
-            previewBitmap.value = null
+        val outputUri = previewAiResultUri.value ?: return
+        if (isProcessing) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            isProcessing = true
+            aiError.value = null
+            aiProgress.value = AIProgress(0f, "Saving AI result...")
+
+            try {
+                val persistedUri = persistAiResultToGallery(outputUri)
+                if (persistedUri == null) {
+                    aiError.value = "Failed to save AI result to Gallery."
+                    return@launch
+                }
+
+                previewAiResultUri.value = null
+                previewBitmap.value?.let { bitmap ->
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                }
+                previewBitmap.value = null
+                setUri(persistedUri)
+                aiProgress.value = null
+            } finally {
+                isProcessing = false
+                if (previewAiResultUri.value == null) {
+                    aiProgress.value = null
+                }
+            }
+        }
+    }
+
+    suspend fun persistAiResultToGallery(sourceUri: String): String? = withContext(Dispatchers.IO) {
+        val resolver = getApplication<Application>().contentResolver
+        val inputUri = Uri.parse(sourceUri)
+        val mimeType = resolver.getType(inputUri) ?: "image/png"
+        val extension = when {
+            mimeType.equals("image/jpeg", ignoreCase = true) -> "jpg"
+            mimeType.equals("image/webp", ignoreCase = true) -> "webp"
+            else -> "png"
+        }
+        val displayName = "MediaAIStudio_AI_" + System.currentTimeMillis() + "." + extension
+
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MediaAIStudio")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
+        val outputUri = resolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            values
+        ) ?: return@withContext null
+
+        try {
+            resolver.openInputStream(inputUri)?.use { input ->
+                resolver.openOutputStream(outputUri)?.use { output ->
+                    input.copyTo(output)
+                } ?: throw IllegalStateException("Unable to open Gallery output.")
+            } ?: throw IllegalStateException("Unable to open AI result.")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val publishValues = ContentValues().apply {
+                    put(MediaStore.Images.Media.IS_PENDING, 0)
+                }
+                resolver.update(outputUri, publishValues, null, null)
+            }
+            outputUri.toString()
+        } catch (_: Throwable) {
+            resolver.delete(outputUri, null, null)
+            null
         }
     }
 
