@@ -15,6 +15,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.example.ai.generative.GenerativeEngine
 import com.example.ai.generative.GenerativeRequest
 import com.example.ai.generative.GenerativeType
+import com.example.ai.generative.isVideoOutput
 import com.example.ai.generative.JobState
 import com.example.ai.video.AIVideoEngine
 import com.example.ai.video.SuggestedCut
@@ -776,10 +777,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
 
     private val importedGenerativeJobIds = mutableSetOf<String>()
 
-    fun isGenerativeVideoType(type: GenerativeType): Boolean =
-        type == GenerativeType.IMAGE_TO_VIDEO ||
-            type == GenerativeType.VIDEO_TO_VIDEO ||
-            type == GenerativeType.VIDEO_EXTENSION
+    fun isGenerativeVideoType(type: GenerativeType): Boolean = type.isVideoOutput
 
     fun canImportGenerativeResult(jobId: String): Boolean {
         val job = generativeEngine.jobs.value[jobId] ?: return false
