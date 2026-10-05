@@ -32,7 +32,7 @@ class ProjectRepository(context: Context) {
     fun findBySourceUri(sourceUri: String): MediaProject? =
         getProjects().firstOrNull { it.sourceUri == sourceUri }
 
-    fun updateEditorSnapshot(id: String, snapshot: String): MediaProject? {
+    fun saveVideoEditorSnapshot(id: String, snapshot: String): MediaProject? {
         val current = getProject(id) ?: return null
         val updated = current.copy(
             editorSnapshot = snapshot,
@@ -90,7 +90,7 @@ class ProjectRepository(context: Context) {
             sourceUri = current.sourceUri
         )
         if (!current.editorSnapshot.isNullOrBlank()) {
-            updateEditorSnapshot(copy.id, current.editorSnapshot)
+            saveVideoEditorSnapshot(copy.id, current.editorSnapshot)
         }
         return getProject(copy.id)
     }
