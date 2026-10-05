@@ -12,7 +12,8 @@ data class MediaProject(
     val mediaType: MediaProjectType,
     val sourceUri: String?,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val editorSnapshot: String? = null
 )
 
 enum class MediaProjectType {
@@ -28,6 +29,19 @@ class ProjectRepository(context: Context) {
 
     fun getProject(id: String): MediaProject? = getProjects().firstOrNull { it.id == id }
 
+    fun findBySourceUri(sourceUri: String): MediaProject? =
+        getProjects().firstOrNull { it.sourceUri == sourceUri }
+
+    fun saveVideoEditorSnapshot(id: String, snapshot: String): MediaProject? {
+        val current = getProject(id) ?: return null
+        val updated = current.copy(
+            editorSnapshot = snapshot,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveProjects(getProjects().map { if (it.id == id) updated else it })
+        return updated
+    }
+
     fun createProject(
         name: String,
         mediaType: MediaProjectType,
@@ -40,7 +54,8 @@ class ProjectRepository(context: Context) {
             mediaType = mediaType,
             sourceUri = sourceUri,
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            editorSnapshot = null
         )
         saveProjects(getProjects() + project)
         return project
@@ -60,7 +75,8 @@ class ProjectRepository(context: Context) {
         val updated = current.copy(
             sourceUri = sourceUri,
             mediaType = mediaType,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            editorSnapshot = null
         )
         saveProjects(getProjects().map { if (it.id == id) updated else it })
         return updated
@@ -68,11 +84,15 @@ class ProjectRepository(context: Context) {
 
     fun duplicateProject(id: String): MediaProject? {
         val current = getProject(id) ?: return null
-        return createProject(
-            name = "${current.name} Copy",
+        val copy = createProject(
+            name = current.name + " Copy",
             mediaType = current.mediaType,
             sourceUri = current.sourceUri
         )
+        if (!current.editorSnapshot.isNullOrBlank()) {
+            saveVideoEditorSnapshot(copy.id, current.editorSnapshot)
+        }
+        return getProject(copy.id)
     }
 
     fun deleteProject(id: String) {
@@ -90,6 +110,7 @@ class ProjectRepository(context: Context) {
                     put("sourceUri", project.sourceUri ?: JSONObject.NULL)
                     put("createdAt", project.createdAt)
                     put("updatedAt", project.updatedAt)
+                    put("editorSnapshot", project.editorSnapshot ?: JSONObject.NULL)
                 }
             )
         }
@@ -114,7 +135,8 @@ class ProjectRepository(context: Context) {
                             mediaType = mediaType,
                             sourceUri = source,
                             createdAt = item.optLong("createdAt", 0L),
-                            updatedAt = item.optLong("updatedAt", 0L)
+                            updatedAt = item.optLong("updatedAt", 0L),
+                            editorSnapshot = item.optString("editorSnapshot", "").takeIf { it.isNotBlank() }
                         )
                     )
                 }
