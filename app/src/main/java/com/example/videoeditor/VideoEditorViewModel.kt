@@ -24,6 +24,10 @@ import com.example.ai.video.SuggestedCut
 import com.example.ai.video.VideoAnalysisResult
 import com.example.audio.AudioTrackType
 import com.example.audio.VoiceOverManagerImpl
+import com.example.projects.MediaProjectType
+import com.example.projects.ProjectRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +55,9 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     val aiMessages = _aiMessages.asSharedFlow()
 
     private val voiceOverManager = VoiceOverManagerImpl(application)
+    private val projectRepository = ProjectRepository(application)
+    private var activeProjectId: String? = null
+    private var autosaveJob: Job? = null
 
     private data class MediaMetadataInfo(
         val durationMs: Long,
@@ -257,6 +264,38 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         if (_state.value.videoClips.isNotEmpty()) return
         viewModelScope.launch {
             val contentResolver = getApplication<Application>().contentResolver
+            val project = projectRepository.findBySourceUri(uriString)
+                ?: projectRepository.createProject(
+                    name = "Video Project",
+                    mediaType = MediaProjectType.VIDEO,
+                    sourceUri = uriString
+                )
+            activeProjectId = project.id
+
+            val restored = project.editorSnapshot
+                ?.let(VideoProjectSnapshotCodec::decode)
+                ?.takeIf { snapshot ->
+                    snapshot.videoClips.isNotEmpty() &&
+                        snapshot.videoClips.any { it.uri == uriString } &&
+                        snapshot.durationMs > 0L
+                }
+
+            if (restored != null) {
+                val validPlayhead = restored.playheadMs.coerceIn(0L, restored.durationMs)
+                updateState(
+                    restored.copy(
+                        playheadMs = validPlayhead,
+                        isPlaying = false,
+                        isExporting = false
+                    )
+                )
+                history.clear()
+                history += _state.value.copy()
+                historyIndex = 0
+                updatePlayerMedia()
+                return@launch
+            }
+
             val metadata = readMediaMetadata(uriString, contentResolver)
             val duration = if (metadata.isImage) 5_000L else metadata.durationMs.coerceAtLeast(10_000L)
             val clip = VideoClip(
@@ -368,7 +407,12 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun autosave() {
-        // Full project persistence is intentionally handled in the project-persistence phase.
+        val projectId = activeProjectId ?: return
+        val snapshot = VideoProjectSnapshotCodec.encode(_state.value)
+        autosaveJob?.cancel()
+        autosaveJob = viewModelScope.launch(Dispatchers.IO) {
+            projectRepository.updateEditorSnapshot(projectId, snapshot)
+        }
     }
 
     fun undo() {
@@ -928,6 +972,8 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     override fun onCleared() {
+        autosaveJob?.cancel()
+        autosaveJob = null
         exoPlayer.removeListener(playerListener)
         exoPlayer.release()
         generativeEngine.close()
