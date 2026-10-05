@@ -161,6 +161,61 @@ class CloudGenerativeClient(
         }
     }
 
+    suspend fun transcribeVideo(
+        sourceUri: Uri,
+        language: String = "auto"
+    ): JSONObject? = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext null
+        var temporarySource: File? = null
+        try {
+            temporarySource = copyUriToCache(sourceUri)
+            val mimeType = appContext.contentResolver.getType(sourceUri)?.toMediaTypeOrNull()
+                ?: "video/mp4".toMediaTypeOrNull()
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("language", language)
+                .addFormDataPart(
+                    "media",
+                    temporarySource.name,
+                    temporarySource.asRequestBody(mimeType)
+                )
+                .build()
+
+            val response = execute(
+                Request.Builder()
+                    .url("$baseUrl/video/transcribe")
+                    .post(body)
+                    .build()
+            )
+            val jobId = response.optString("jobId", "")
+                .ifEmpty { response.optString("id", "") }
+            if (jobId.isBlank()) return@withContext response
+
+            repeat(MAX_POLLS) { attempt ->
+                coroutineContext.ensureActive()
+                val job = execute(
+                    authorizedRequest("$baseUrl/jobs/${Uri.encode(jobId)}")
+                        .get()
+                        .build()
+                )
+                when (job.optString("state", "PROCESSING").uppercase()) {
+                    "COMPLETED", "COMPLETE", "SUCCEEDED", "SUCCESS" -> {
+                        return@withContext job.optJSONObject("result") ?: job
+                    }
+                    "FAILED", "ERROR", "CANCELLED", "CANCELED" -> return@withContext null
+                }
+                delay(if (attempt < 10) 1_000L else 2_000L)
+            }
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } finally {
+            temporarySource?.delete()
+        }
+    }
+
     suspend fun getJobStatus(jobId: String): GenerativeJobResponse? = withContext(Dispatchers.IO) {
         if (!isConfigured) return@withContext null
         try {
