@@ -20,6 +20,11 @@ enum class GenerativeType {
     VIDEO_EXTENSION
 }
 
+val GenerativeType.isVideoOutput: Boolean
+    get() = this == GenerativeType.IMAGE_TO_VIDEO ||
+        this == GenerativeType.VIDEO_TO_VIDEO ||
+        this == GenerativeType.VIDEO_EXTENSION
+
 sealed class GenerativeResult {
     data class Success(
         val outputUri: Uri,
