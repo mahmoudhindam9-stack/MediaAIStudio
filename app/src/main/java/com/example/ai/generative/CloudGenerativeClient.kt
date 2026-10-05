@@ -170,16 +170,14 @@ class CloudGenerativeClient(
                     .build()
             )
             val resultObj = json.optJSONObject("result")
+            val nestedError = resultObj?.optString("error", "").orEmpty()
+            val nestedOutput = resultObj?.optString("outputUrl", "").orEmpty()
             GenerativeJobResponse(
                 state = json.optString("state", "FAILED"),
                 message = json.optString("message", ""),
                 progress = json.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f),
-                errorReason = json.optString("error", "")
-                    .ifEmpty { resultObj?.optString("error", "") }
-                    .ifEmpty { null },
-                outputUrl = json.optString("outputUrl", "")
-                    .ifEmpty { resultObj?.optString("outputUrl", "") }
-                    .ifEmpty { null }
+                errorReason = json.optString("error", "").takeIf { it.isNotBlank() } ?: nestedError.takeIf { it.isNotBlank() },
+                outputUrl = json.optString("outputUrl", "").takeIf { it.isNotBlank() } ?: nestedOutput.takeIf { it.isNotBlank() }
             )
         } catch (_: Exception) {
             null
