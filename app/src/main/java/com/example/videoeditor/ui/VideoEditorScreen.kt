@@ -75,6 +75,7 @@ fun VideoEditorScreen(
     val context = LocalContext.current
     val viewModel: VideoEditorViewModel = viewModel()
     val state by viewModel.state.collectAsState()
+    val generativeJobs by viewModel.generativeEngine.jobs.collectAsState()
 
     var showAiDialog by remember { mutableStateOf(false) }
     var showTrimDialog by remember { mutableStateOf(false) }
@@ -214,6 +215,25 @@ fun VideoEditorScreen(
                     TextButton(onClick = { showConsentType = GenerativeType.IMAGE_TO_VIDEO.name; showAiDialog = false }) { Text("Image → Video") }
                     TextButton(onClick = { showConsentType = GenerativeType.VIDEO_TO_VIDEO.name; showAiDialog = false }) { Text("Video → Video") }
                     TextButton(onClick = { showConsentType = GenerativeType.VIDEO_EXTENSION.name; showAiDialog = false }) { Text("Video Extension") }
+
+                    val completedGenerations = generativeJobs.values
+                        .filter { it.state == com.example.ai.generative.JobState.COMPLETED }
+                        .filter { viewModel.canImportGenerativeResult(it.id) }
+
+                    if (completedGenerations.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text("Completed Generations", color = Color.Gray, fontSize = 12.sp)
+                        completedGenerations.forEach { job ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.importGenerativeResult(job.id)
+                                    showAiDialog = false
+                                }
+                            ) {
+                                Text("Add " + job.request.type.name.replace("_", " ") + " to timeline")
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { showAiDialog = false }) { Text("Close") } }
