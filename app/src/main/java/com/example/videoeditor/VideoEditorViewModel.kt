@@ -800,6 +800,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         exoPlayer.removeListener(playerListener)
         exoPlayer.release()
         generativeEngine.close()
+        aiEngine.close()
         super.onCleared()
     }
 }
