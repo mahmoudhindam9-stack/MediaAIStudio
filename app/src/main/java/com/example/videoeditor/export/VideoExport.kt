@@ -2,11 +2,13 @@ package com.example.videoeditor.export
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Matrix
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
@@ -21,6 +23,8 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import androidx.media3.effect.MatrixTransformation
+import androidx.media3.common.util.Size
 import com.example.videoeditor.AudioClip
 import com.example.videoeditor.VideoEditorState
 import java.io.DataOutputStream
@@ -61,6 +65,85 @@ fun VideoEditorState.toVideoRenderPlan(): List<VideoRenderItem> =
             isImage = clip.isImage
         )
     }
+
+internal fun interpolateReframeKeyframe(
+    keyframes: List<com.example.videoeditor.ReframeKeyframe>,
+    timeMs: Long
+): com.example.videoeditor.ReframeKeyframe? {
+    if (keyframes.isEmpty()) return null
+    val sorted = keyframes.sortedBy { it.timeMs }
+    if (timeMs <= sorted.first().timeMs) return sorted.first()
+    if (timeMs >= sorted.last().timeMs) return sorted.last()
+
+    val upperIndex = sorted.indexOfFirst { it.timeMs >= timeMs }
+    if (upperIndex <= 0) return sorted.first()
+
+    val lower = sorted[upperIndex - 1]
+    val upper = sorted[upperIndex]
+    val span = (upper.timeMs - lower.timeMs).coerceAtLeast(1L)
+    val fraction = ((timeMs - lower.timeMs).toFloat() / span).coerceIn(0f, 1f)
+
+    fun lerp(a: Float, b: Float): Float = a + (b - a) * fraction
+
+    return com.example.videoeditor.ReframeKeyframe(
+        timeMs = timeMs,
+        centerX = lerp(lower.centerX, upper.centerX),
+        centerY = lerp(lower.centerY, upper.centerY),
+        width = lerp(lower.width, upper.width).coerceIn(0.0001f, 1f),
+        height = lerp(lower.height, upper.height).coerceIn(0.0001f, 1f),
+        confidence = lerp(lower.confidence, upper.confidence).coerceIn(0f, 1f)
+    )
+}
+
+private fun createDynamicReframeEffect(
+    keyframes: List<com.example.videoeditor.ReframeKeyframe>,
+    sourceTrimStartMs: Long,
+    targetAspectRatio: Float
+): MatrixTransformation {
+    require(keyframes.isNotEmpty()) { "Smart Reframe requires at least one keyframe" }
+    require(targetAspectRatio > 0f) { "Target aspect ratio must be positive" }
+
+    return object : MatrixTransformation {
+        override fun configure(inputWidth: Int, inputHeight: Int): Size {
+            require(inputWidth > 0 && inputHeight > 0) { "Invalid video dimensions" }
+            val inputAspect = inputWidth.toFloat() / inputHeight.toFloat()
+            return if (inputAspect > targetAspectRatio) {
+                Size(
+                    (inputHeight * targetAspectRatio).toInt().coerceAtLeast(2),
+                    inputHeight
+                )
+            } else {
+                Size(
+                    inputWidth,
+                    (inputWidth / targetAspectRatio).toInt().coerceAtLeast(2)
+                )
+            }
+        }
+
+        override fun getMatrix(presentationTimeUs: Long): Matrix {
+            val sourceTimeMs = sourceTrimStartMs + presentationTimeUs / 1_000L
+            val keyframe = interpolateReframeKeyframe(keyframes, sourceTimeMs)
+                ?: return Matrix()
+
+            val width = keyframe.width.coerceIn(0.0001f, 1f)
+            val height = keyframe.height.coerceIn(0.0001f, 1f)
+            val centerX = (keyframe.centerX).coerceIn(0f, 1f)
+            val centerY = (keyframe.centerY).coerceIn(0f, 1f)
+
+            // Media3's matrix operates in normalized device coordinates:
+            // X is left(-1)..right(+1), Y is bottom(-1)..top(+1).
+            val centerNdcX = centerX * 2f - 1f
+            val centerNdcY = 1f - centerY * 2f
+            val scaleX = 1f / width
+            val scaleY = 1f / height
+
+            return Matrix().apply {
+                postScale(scaleX, scaleY)
+                postTranslate(-centerNdcX * scaleX, -centerNdcY * scaleY)
+            }
+        }
+    }
+}
 
 /** Resolves audio timeline semantics without allowing a track to exceed project duration. */
 internal fun AudioClip.toAudioRenderPlan(projectDurationMs: Long): AudioRenderPlan? {
@@ -146,7 +229,13 @@ class VideoExport(private val context: Context) {
             temporaryFiles += outputFile
             reportProgress(0)
 
-            val videoItems = renderPlan.map { item ->
+            val canApplySmartReframe =
+                state.videoClips.size == 1 &&
+                    state.aiReframeKeyframes?.isNotEmpty() == true &&
+                    renderPlan.size == 1 &&
+                    !renderPlan.first().isImage
+
+            val videoItems = renderPlan.mapIndexed { index, item ->
                 val mediaBuilder = MediaItem.Builder().setUri(item.uri)
                 if (item.isImage) {
                     mediaBuilder.setImageDurationMs(item.trimEndMs - item.trimStartMs)
@@ -160,17 +249,35 @@ class VideoExport(private val context: Context) {
                 }
 
                 val editedBuilder = EditedMediaItem.Builder(mediaBuilder.build())
+                val videoEffects: List<Effect> =
+                    if (
+                        canApplySmartReframe &&
+                        index == 0
+                    ) {
+                        listOf(
+                            createDynamicReframeEffect(
+                                keyframes = requireNotNull(state.aiReframeKeyframes),
+                                sourceTrimStartMs = item.trimStartMs,
+                                targetAspectRatio = 9f / 16f
+                            )
+                        )
+                    } else {
+                        emptyList()
+                    }
+
                 if (item.isImage) {
                     editedBuilder.setFrameRate(30)
-                } else if (item.muted) {
-                    editedBuilder.setRemoveAudio(true)
                 } else {
+                    if (item.muted) {
+                        editedBuilder.setRemoveAudio(true)
+                    }
                     editedBuilder.setEffects(
                         audioEffects(
                             volume = item.volume,
                             durationMs = item.trimEndMs - item.trimStartMs,
                             fadeInDurationMs = 0L,
-                            fadeOutDurationMs = 0L
+                            fadeOutDurationMs = 0L,
+                            videoEffects = videoEffects
                         )
                     )
                 }
@@ -266,7 +373,8 @@ class VideoExport(private val context: Context) {
         volume: Float,
         durationMs: Long,
         fadeInDurationMs: Long,
-        fadeOutDurationMs: Long
+        fadeOutDurationMs: Long,
+        videoEffects: List<Effect> = emptyList()
     ): Effects {
         val channelMixer = ChannelMixingAudioProcessor()
         for (inputChannelCount in 1..6) {
@@ -324,7 +432,7 @@ class VideoExport(private val context: Context) {
                 fadeOutDurationMs = normalizedFadeOut.coerceAtMost(durationMs.coerceAtLeast(0L))
             )
         }
-        return Effects(processors, emptyList())
+        return Effects(processors, videoEffects)
     }
 
     private fun publishToMediaStore(source: File): Uri {
