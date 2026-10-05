@@ -161,35 +161,6 @@ class CloudGenerativeClient(
         }
     }
 
-    suspend fun transcribeVideo(sourceUri: Uri, language: String = "auto"): JSONObject? =
-        withContext(Dispatchers.IO) {
-            if (!isConfigured) return@withContext null
-            var temporarySource: File? = null
-            try {
-                temporarySource = copyUriToCache(sourceUri)
-                val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("language", language)
-                    .addFormDataPart(
-                        "media",
-                        temporarySource.name,
-                        temporarySource.asRequestBody(
-                            appContext.contentResolver.getType(sourceUri)?.toMediaTypeOrNull()
-                                ?: "video/mp4".toMediaTypeOrNull()
-                        )
-                    )
-                execute(
-                    Request.Builder()
-                        .url("$baseUrl/video/transcribe")
-                        .post(builder.build())
-                        .build()
-                )
-            } catch (_: Exception) {
-                null
-            } finally {
-                temporarySource?.delete()
-            }
-        }
-
     suspend fun getJobStatus(jobId: String): GenerativeJobResponse? = withContext(Dispatchers.IO) {
         if (!isConfigured) return@withContext null
         try {

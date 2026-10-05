@@ -7,16 +7,12 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.net.Uri
 import androidx.annotation.OptIn
-import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.ToInt16PcmAudioProcessor
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.Brightness
-import androidx.media3.effect.Contrast
-import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -164,22 +160,20 @@ class VideoExport(private val context: Context) {
                 }
 
                 val editedBuilder = EditedMediaItem.Builder(mediaBuilder.build())
-                if (item.isImage) editedBuilder.setFrameRate(30)
-                if (item.muted) editedBuilder.setRemoveAudio(true)
-
-                val videoEffects = videoEffectsFor(item, state)
-                val effects = if (!item.isImage && !item.muted) {
-                    audioEffects(
-                        volume = item.volume,
-                        durationMs = item.trimEndMs - item.trimStartMs,
-                        fadeInDurationMs = 0L,
-                        fadeOutDurationMs = 0L,
-                        videoEffects = videoEffects
-                    )
+                if (item.isImage) {
+                    editedBuilder.setFrameRate(30)
+                } else if (item.muted) {
+                    editedBuilder.setRemoveAudio(true)
                 } else {
-                    Effects(emptyList(), videoEffects)
+                    editedBuilder.setEffects(
+                        audioEffects(
+                            volume = item.volume,
+                            durationMs = item.trimEndMs - item.trimStartMs,
+                            fadeInDurationMs = 0L,
+                            fadeOutDurationMs = 0L
+                        )
+                    )
                 }
-                editedBuilder.setEffects(effects)
                 editedBuilder.build()
             }
 
@@ -268,30 +262,11 @@ class VideoExport(private val context: Context) {
     }
 
     @OptIn(UnstableApi::class)
-    private fun videoEffectsFor(
-        item: VideoRenderItem,
-        state: VideoEditorState
-    ): List<Effect> {
-        val effects = mutableListOf<androidx.media3.effect.Effect>()
-        if (item.rotation % 360f != 0f) {
-            effects += ScaleAndRotateTransformation.Builder()
-                .setRotationDegrees(item.rotation)
-                .build()
-        }
-        state.aiEnhancement?.let { enhancement ->
-            if (enhancement.brightness != 0f) effects += Brightness(enhancement.brightness)
-            if (enhancement.contrast != 0f) effects += Contrast(enhancement.contrast)
-        }
-        return effects
-    }
-
-    @OptIn(UnstableApi::class)
     private fun audioEffects(
         volume: Float,
         durationMs: Long,
         fadeInDurationMs: Long,
-        fadeOutDurationMs: Long,
-        videoEffects: List<androidx.media3.effect.Effect> = emptyList()
+        fadeOutDurationMs: Long
     ): Effects {
         val channelMixer = ChannelMixingAudioProcessor()
         for (inputChannelCount in 1..6) {
@@ -349,7 +324,7 @@ class VideoExport(private val context: Context) {
                 fadeOutDurationMs = normalizedFadeOut.coerceAtMost(durationMs.coerceAtLeast(0L))
             )
         }
-        return Effects(processors, videoEffects)
+        return Effects(processors, emptyList())
     }
 
     private fun publishToMediaStore(source: File): Uri {

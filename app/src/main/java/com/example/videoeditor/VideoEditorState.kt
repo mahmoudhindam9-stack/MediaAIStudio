@@ -5,7 +5,6 @@ import java.util.UUID
 import com.example.ai.video.SubtitleTrack
 import com.example.ai.video.TrackingKeyframe
 import com.example.ai.video.SuggestedCut
-import com.example.ai.video.VideoEnhancementSuggestion
 
 /**
  * A timeline consists of a single sequence of VideoClips (VideoTrack) and multiple AudioTracks.
@@ -21,7 +20,6 @@ data class VideoEditorState(
     val aiTrackingData: List<TrackingKeyframe>? = null,
     val aiSuggestedCuts: List<SuggestedCut>? = null,
     val aiReframeKeyframes: List<ReframeKeyframe>? = null,
-    val aiEnhancement: VideoEnhancementSuggestion? = null,
     val isExporting: Boolean = false
 )
 
