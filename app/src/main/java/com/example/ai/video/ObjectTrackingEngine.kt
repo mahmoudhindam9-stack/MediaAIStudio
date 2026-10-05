@@ -11,7 +11,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
-class ObjectTrackingEngine(private val context: Context) {
+class ObjectTrackingEngine(private val context: Context) : AutoCloseable {
     private val objectDetector by lazy {
         val options = ObjectDetectorOptions.Builder()
             .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
