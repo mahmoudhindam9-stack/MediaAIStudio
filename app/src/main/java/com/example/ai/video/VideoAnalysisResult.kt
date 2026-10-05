@@ -35,5 +35,6 @@ sealed class VideoAnalysisResult {
     data class SmartCuts(val suggestedCuts: List<SuggestedCut>) : VideoAnalysisResult()
     data class AutoCaptions(val track: SubtitleTrack) : VideoAnalysisResult()
     data class SmartReframe(val cropPaths: List<TrackingKeyframe>) : VideoAnalysisResult()
+    data class Enhancement(val suggestion: VideoEnhancementSuggestion) : VideoAnalysisResult()
     data class Error(val message: String) : VideoAnalysisResult()
 }
