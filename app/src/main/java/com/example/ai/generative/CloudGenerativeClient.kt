@@ -8,6 +8,7 @@ import com.example.ai.core.AIError
 import com.example.ai.core.AIProgress
 import com.example.ai.core.AIProviderType
 import com.example.ai.core.AIRequest
+import com.example.ai.core.AIResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
