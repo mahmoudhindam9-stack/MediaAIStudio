@@ -35,8 +35,7 @@ android {
       ).trim()
 
     fun buildConfigString(value: String): String =
-      """ + value.replace("\\", "\\\\").replace(""", "\"") + """
-
+      "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
     buildConfigField("String", "MEDIA_AI_BACKEND_URL", buildConfigString(backendUrl))
     buildConfigField("String", "MEDIA_AI_BACKEND_API_KEY", buildConfigString(backendApiKey))
   }
