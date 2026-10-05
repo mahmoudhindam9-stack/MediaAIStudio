@@ -411,7 +411,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         val snapshot = VideoProjectSnapshotCodec.encode(_state.value)
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch(Dispatchers.IO) {
-            projectRepository.updateEditorSnapshot(projectId, snapshot)
+            projectRepository.saveVideoEditorSnapshot(projectId, snapshot)
         }
     }
 
