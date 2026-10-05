@@ -159,7 +159,10 @@ class PhotoEditorAssistantExecutor(
 
     private suspend fun applyAiResult(outputUri: String) {
         val context = viewModel.getApplication<android.app.Application>()
-        val uri = Uri.parse(outputUri)
+        val persistedUri = viewModel.persistAiResultToGallery(outputUri)
+            ?: throw IllegalStateException("Failed to save AI result to Gallery.")
+
+        val uri = Uri.parse(persistedUri)
         val bitmap = withContext(Dispatchers.IO) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 ImageDecoder.decodeBitmap(
@@ -173,7 +176,7 @@ class PhotoEditorAssistantExecutor(
             }.copy(Bitmap.Config.ARGB_8888, true)
         }
 
-        viewModel.state.value = viewModel.state.value.copy(uriString = outputUri)
+        viewModel.state.value = viewModel.state.value.copy(uriString = persistedUri)
         viewModel.originalBitmap.value = bitmap
         viewModel.previewAiResultUri.value = null
         viewModel.previewBitmap.value = null
