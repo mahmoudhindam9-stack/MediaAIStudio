@@ -4,7 +4,9 @@ import com.example.audio.AudioTrackType
 import com.example.videoeditor.AudioClip
 import com.example.videoeditor.VideoClip
 import com.example.videoeditor.VideoEditorState
+import com.example.videoeditor.ReframeKeyframe
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -161,6 +163,37 @@ class VideoExportTest {
             isMuted = true
         )
         assertNull(track.toAudioRenderPlan(10_000L))
+    }
+
+    @Test
+    fun smartReframeInterpolation_blendsBetweenKeyframes() {
+        val keyframes = listOf(
+            ReframeKeyframe(
+                timeMs = 0L,
+                centerX = 0.25f,
+                centerY = 0.50f,
+                width = 0.50f,
+                height = 0.90f,
+                confidence = 0.8f
+            ),
+            ReframeKeyframe(
+                timeMs = 1_000L,
+                centerX = 0.75f,
+                centerY = 0.60f,
+                width = 0.40f,
+                height = 0.80f,
+                confidence = 1.0f
+            )
+        )
+
+        val mid = interpolateReframeKeyframe(keyframes, 500L)
+
+        assertNotNull(mid)
+        assertEquals(0.50f, mid!!.centerX, 0.0001f)
+        assertEquals(0.55f, mid.centerY, 0.0001f)
+        assertEquals(0.45f, mid.width, 0.0001f)
+        assertEquals(0.85f, mid.height, 0.0001f)
+        assertEquals(0.90f, mid.confidence, 0.0001f)
     }
 
     @Test
