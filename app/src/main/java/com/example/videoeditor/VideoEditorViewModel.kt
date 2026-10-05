@@ -762,10 +762,10 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
                     val confidencePercent = (result.suggestion.confidence * 100f).toInt()
                     _aiMessages.emit("Video enhancement applied — confidence ${confidencePercent}%")
                 }
-        }
                 is VideoAnalysisResult.Error -> _aiMessages.emit(result.message)
                 else -> Unit
             }
+        }
     }
 
     fun runGenerativeVideo(type: GenerativeType, prompt: String) {
