@@ -108,6 +108,8 @@ class ObjectTrackingEngine(private val context: Context) : AutoCloseable {
             }
         }
 
+    override fun close() { runCatching { objectDetector.close() } }
+
     private fun interpolateMissing(keyframes: List<TrackingKeyframe>): List<TrackingKeyframe> {
         if (keyframes.size < 2) return keyframes
         val sorted = keyframes.sortedBy { it.timeMs }
