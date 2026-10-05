@@ -15,12 +15,12 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Base64
 import java.io.ByteArrayOutputStream
-import java.util.Locale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import com.example.ai.core.*
 import com.example.ai.provider.*
@@ -360,9 +360,7 @@ class PhotoEditorViewModel(application: Application) : AndroidViewModel(applicat
                 aiProgress.value = null
             } finally {
                 isProcessing = false
-                if (previewAiResultUri.value == null) {
-                    aiProgress.value = null
-                }
+                aiProgress.value = null
             }
         }
     }
