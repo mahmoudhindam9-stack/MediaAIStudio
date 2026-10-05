@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
@@ -270,7 +271,7 @@ class VideoExport(private val context: Context) {
     private fun videoEffectsFor(
         item: VideoRenderItem,
         state: VideoEditorState
-    ): List<androidx.media3.effect.Effect> {
+    ): List<Effect> {
         val effects = mutableListOf<androidx.media3.effect.Effect>()
         if (item.rotation % 360f != 0f) {
             effects += ScaleAndRotateTransformation.Builder()
