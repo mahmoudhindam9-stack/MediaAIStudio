@@ -57,6 +57,7 @@ data class EditorState(
     val flipVertical: Boolean = false,
     val drawings: List<Drawing> = emptyList(),
     val objectRemovalStrokes: List<Drawing> = emptyList(),
+    val objectRemovalBrushSize: Float = 0.045f,
     val texts: List<TextOverlay> = emptyList(),
     val stickers: List<Sticker> = emptyList(),
     val filter: FilterType = FilterType.NONE,
