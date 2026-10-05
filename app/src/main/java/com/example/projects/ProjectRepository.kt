@@ -84,12 +84,34 @@ class ProjectRepository(context: Context) {
 
     fun duplicateProject(id: String): MediaProject? {
         val current = getProject(id) ?: return null
-        return createProject(
-            name = "${current.name} Copy",
+        val copy = createProject(
+            name = current.name + " Copy",
             mediaType = current.mediaType,
             sourceUri = current.sourceUri
         )
+        if (!current.editorSnapshot.isNullOrBlank()) {
+            updateEditorSnapshot(copy.id, current.editorSnapshot)
+        }
+        return getProject(copy.id)
     }
+
+    fun findVideoProjectBySource(sourceUri: String): MediaProject? =
+        getProjects().firstOrNull {
+            it.mediaType == MediaProjectType.VIDEO && it.sourceUri == sourceUri
+        }
+
+    fun updateEditorSnapshot(id: String, snapshot: String): MediaProject? {
+        val current = getProject(id) ?: return null
+        val updated = current.copy(
+            editorSnapshot = snapshot,
+            updatedAt = System.currentTimeMillis()
+        )
+        saveProjects(getProjects().map { if (it.id == id) updated else it })
+        return updated
+    }
+
+    fun getVideoEditorSnapshot(sourceUri: String): String? =
+        findVideoProjectBySource(sourceUri)?.editorSnapshot
 
     fun deleteProject(id: String) {
         saveProjects(getProjects().filterNot { it.id == id })
@@ -106,6 +128,7 @@ class ProjectRepository(context: Context) {
                     put("sourceUri", project.sourceUri ?: JSONObject.NULL)
                     put("createdAt", project.createdAt)
                     put("updatedAt", project.updatedAt)
+                    put("editorSnapshot", project.editorSnapshot ?: JSONObject.NULL)
                     put("editorSnapshot", project.editorSnapshot ?: JSONObject.NULL)
                 }
             )
