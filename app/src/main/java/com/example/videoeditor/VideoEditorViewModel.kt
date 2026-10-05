@@ -2,6 +2,7 @@ package com.example.videoeditor
 
 import android.app.Application
 import android.content.ContentResolver
+import android.content.ContentValues
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.util.UUID
 
 class VideoEditorViewModel(application: Application) : AndroidViewModel(application) {
@@ -772,6 +774,131 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    private val importedGenerativeJobIds = mutableSetOf<String>()
+
+    fun isGenerativeVideoType(type: GenerativeType): Boolean =
+        type == GenerativeType.IMAGE_TO_VIDEO ||
+            type == GenerativeType.VIDEO_TO_VIDEO ||
+            type == GenerativeType.VIDEO_EXTENSION
+
+    fun canImportGenerativeResult(jobId: String): Boolean {
+        val job = generativeEngine.jobs.value[jobId] ?: return false
+        return job.state == JobState.COMPLETED &&
+            job.result is com.example.ai.generative.GenerativeResult.Success &&
+            jobId !in importedGenerativeJobIds
+    }
+
+    fun importGenerativeResult(jobId: String) {
+        if (!canImportGenerativeResult(jobId)) return
+
+        val job = generativeEngine.jobs.value[jobId] ?: return
+        val result = job.result as? com.example.ai.generative.GenerativeResult.Success ?: return
+        viewModelScope.launch {
+            try {
+                _aiMessages.emit("Saving generated media to Gallery…")
+                val persistedUri = persistGeneratedMedia(result.outputUri, job.request.type)
+                    ?: throw IOException("Generated media could not be saved")
+
+                val resolver = getApplication<Application>().contentResolver
+                val metadata = readMediaMetadata(persistedUri, resolver)
+                val duration = when {
+                    metadata.isImage -> 5_000L
+                    metadata.durationMs > 0L -> metadata.durationMs
+                    else -> throw IOException("Generated video duration could not be read")
+                }
+
+                val generatedClip = VideoClip(
+                    uri = persistedUri,
+                    originalDurationMs = duration,
+                    durationMs = duration,
+                    rotation = metadata.rotation,
+                    isImage = metadata.isImage
+                )
+
+                val current = _state.value
+                val (recalculatedClips, totalDuration) =
+                    recalculateTimeline(current.videoClips + generatedClip)
+
+                importedGenerativeJobIds += jobId
+                updateState(
+                    current.copy(
+                        videoClips = recalculatedClips,
+                        durationMs = totalDuration,
+                        selectedItemId = generatedClip.id,
+                        playheadMs = current.playheadMs.coerceIn(0L, totalDuration),
+                        isPlaying = false
+                    )
+                )
+                commitState()
+                updatePlayerMedia()
+                _aiMessages.emit("Generated media added to timeline.")
+            } catch (t: Throwable) {
+                _aiMessages.emit("Could not import generated media: " + (t.message ?: "unknown error"))
+            }
+        }
+    }
+
+    private suspend fun persistGeneratedMedia(
+        sourceUri: Uri,
+        type: GenerativeType
+    ): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val resolver = getApplication<Application>().contentResolver
+        val sourceMime = resolver.getType(sourceUri)
+        val isVideo = isGenerativeVideoType(type) || sourceMime?.startsWith("video/") == true
+
+        val mimeType = sourceMime ?: if (isVideo) "video/mp4" else "image/png"
+        val extension = when {
+            mimeType.equals("video/mp4", ignoreCase = true) -> "mp4"
+            mimeType.equals("image/jpeg", ignoreCase = true) -> "jpg"
+            mimeType.equals("image/webp", ignoreCase = true) -> "webp"
+            else -> if (isVideo) "mp4" else "png"
+        }
+        val displayName = "MediaAIStudio_Generated_" + System.currentTimeMillis() + "." + extension
+
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    if (isVideo) "Movies/MediaAIStudio" else "Pictures/MediaAIStudio"
+                )
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val collection = if (isVideo) {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val outputUri = resolver.insert(collection, values) ?: return@withContext null
+
+        try {
+            resolver.openInputStream(sourceUri)?.use { input ->
+                resolver.openOutputStream(outputUri)?.use { output ->
+                    input.copyTo(output)
+                } ?: throw IOException("Could not open Gallery output")
+            } ?: throw IOException("Could not open generated output")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.update(
+                    outputUri,
+                    ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    },
+                    null,
+                    null
+                )
+            }
+
+            outputUri.toString()
+        } catch (_: Throwable) {
+            resolver.delete(outputUri, null, null)
+            null
+        }
+    }
     fun runGenerativeVideo(type: GenerativeType, prompt: String) {
         val uri = _state.value.videoClips.firstOrNull()?.uri
         if (uri == null) {
