@@ -38,6 +38,13 @@ android {
       "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
     buildConfigField("String", "MEDIA_AI_BACKEND_URL", buildConfigString(backendUrl))
     buildConfigField("String", "MEDIA_AI_BACKEND_API_KEY", buildConfigString(backendApiKey))
+
+    val permanentReleaseCertSha256 = (
+      System.getenv("RELEASE_CERT_SHA256")
+        ?: project.findProperty("RELEASE_CERT_SHA256")?.toString()
+        ?: "62a820f073d4797e2da54338d447b0317d225f501c4e9b8811d8a30c8494ab74"
+    ).trim().lowercase().replace(":", "")
+    buildConfigField("String", "PERMANENT_RELEASE_CERT_SHA256", buildConfigString(permanentReleaseCertSha256))
   }
 
   signingConfigs {

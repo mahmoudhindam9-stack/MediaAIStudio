@@ -197,7 +197,12 @@ fun UpdateScreen(onBack: () -> Unit) {
                                 }
                                 is UpdateState.ReadyToInstall -> {
                                     Button(
-                                        onClick = { UpdateManager(context).installApk(st.apkFile) },
+                                        onClick = {
+                                            val result = UpdateManager(context).installApk(st.apkFile)
+                                            if (result is InstallResult.Error) {
+                                                downloadState = UpdateState.Error(result.message)
+                                            }
+                                        },
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Text(stringResource(com.example.R.string.install_update))

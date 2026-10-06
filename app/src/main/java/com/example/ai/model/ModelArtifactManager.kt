@@ -40,6 +40,16 @@ class ModelArtifactManager(
     val states: StateFlow<Map<String, ArtifactState>> = _states.asStateFlow()
 
     companion object {
+        @Volatile
+        @JvmStatic
+        var INSTANCE: ModelArtifactManager? = null
+
+        fun getInstance(context: Context, client: OkHttpClient = OkHttpClient()): ModelArtifactManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: ModelArtifactManager(context.applicationContext, client).also { INSTANCE = it }
+            }
+        }
+
         private const val LAMA_SHA256 = "7df918ac3921d3daf0aae1d219776cf0dc4e4935f035af81841b40adcf74fdf2"
         private const val CPGA_SHA256 = "8b125569618cbc342b3c0a095f712dfc899ac739e896208baf13cb1769c4c319"
         private val ESRGAN_SHA256: String? = null
@@ -110,6 +120,22 @@ class ModelArtifactManager(
             )
         } else {
             ArtifactState(state = ModelInstallState.NOT_INSTALLED)
+        }
+    }
+
+    fun refreshInstalledStates() {
+        for (artifact in ARTIFACTS) {
+            val file = localFile(artifact)
+            if (file.exists()) {
+                if (isValid(file, artifact)) {
+                    updateState(artifact.id, ArtifactState(state = ModelInstallState.READY, currentBytes = file.length(), expectedBytes = file.length()))
+                } else {
+                    file.delete()
+                    updateState(artifact.id, ArtifactState(state = ModelInstallState.NOT_INSTALLED))
+                }
+            } else {
+                updateState(artifact.id, ArtifactState(state = ModelInstallState.NOT_INSTALLED))
+            }
         }
     }
 

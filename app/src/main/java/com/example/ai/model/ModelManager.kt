@@ -14,7 +14,7 @@ interface ModelManager {
 
 class AppModelManager(context: Context) : ModelManager {
     private val appContext = context.applicationContext
-    val artifacts = ModelArtifactManager(appContext)
+    val artifacts = ModelArtifactManager.getInstance(appContext)
 
     override fun getAvailableModels(): List<ModelInfo> {
         fun createModelInfo(
@@ -32,16 +32,7 @@ class AppModelManager(context: Context) : ModelManager {
             // Read the reactive download state only. Never run ONNX/TFLite graph validation
             // while Compose is rendering, because large models can block or crash the UI.
             val stateHolder = artifacts.states.value[id] ?: ArtifactState()
-            val lightweightFileSize = artifact?.let {
-                val file = artifacts.localFile(it)
-                if (file.isFile) file.length() else 0L
-            } ?: 0L
-            val lightweightReady = artifact?.let { lightweightFileSize >= it.minimumBytes } == true
-            val effectiveState = when {
-                stateHolder.state != ModelInstallState.NOT_INSTALLED -> stateHolder.state
-                lightweightReady -> ModelInstallState.READY
-                else -> ModelInstallState.NOT_INSTALLED
-            }
+            val effectiveState = stateHolder.state
 
             return ModelInfo(
                 id = id,
@@ -51,7 +42,7 @@ class AppModelManager(context: Context) : ModelManager {
                 status = effectiveState,
                 progress = if (effectiveState == ModelInstallState.READY) 100 else stateHolder.progress,
                 errorMessage = stateHolder.errorMessage,
-                currentBytes = if (lightweightReady) lightweightFileSize else stateHolder.currentBytes,
+                currentBytes = stateHolder.currentBytes,
                 expectedBytes = stateHolder.expectedBytes ?: defaultSizeBytes,
                 checksumValid = if (effectiveState == ModelInstallState.READY && sha256 != null) true else stateHolder.checksumValid,
                 version = version,

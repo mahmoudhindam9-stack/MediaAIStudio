@@ -44,7 +44,7 @@ jobs:
             echo "Using keystore from RELEASE_KEYSTORE_PATH..."
             echo "RELEASE_KEYSTORE_PATH=$RELEASE_KEYSTORE_PATH_SECRET" >> "$GITHUB_ENV"
           else
-            echo "::error::Release signing keystore is not provided! Configure RELEASE_KEYSTORE_BASE64 in GitHub Secrets."
+            echo "::error::Permanent release signing keystore is not provided! Configure RELEASE_KEYSTORE_BASE64 in GitHub Secrets."
             exit 1
           fi
 
@@ -55,10 +55,11 @@ jobs:
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
         run: |
           set -o pipefail
           if [ -z "$RELEASE_STORE_PASSWORD" ] || [ -z "$RELEASE_KEY_ALIAS" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
-            echo "::error::Production signing secrets (RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD) are not fully configured in GitHub Secrets!"
+            echo "::error::Permanent production signing secrets (RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD) are not fully configured in GitHub Secrets! Release builds must not fall back to ephemeral debug keys."
             exit 1
           fi
 
@@ -69,10 +70,23 @@ jobs:
           compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null
           echo "asset_glob=app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
 
-      - name: Verify APK Signature against v1.3.4
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          version_name=$(grep -m1 'versionName =' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
+          version_code=$(grep -m1 'versionCode =' app/build.gradle.kts | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+          echo "name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Release APK Package, Version, and Permanent Signature
+        id: verify_apk
         shell: bash
         env:
           ASSET_GLOB: ${{ steps.release_build.outputs.asset_glob }}
+          EXPECTED_VERSION_NAME: ${{ steps.version.outputs.name }}
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.code }}
+          RELEASE_CERT_SECRET: ${{ secrets.RELEASE_CERT_SHA256 }}
         run: |
           set -o pipefail
           apk=$(compgen -G "$ASSET_GLOB" | head -n1)
@@ -87,38 +101,41 @@ jobs:
           echo "Verifying APK signature using apksigner..."
           SIG_OUTPUT=$("$APKSIGNER" verify --print-certs -v "$apk")
 
-          ACTUAL_SHA256=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-256 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]')
-          ACTUAL_SHA1=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-1 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]')
+          ACTUAL_SHA256=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-256 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
+          ACTUAL_SHA1=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-1 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
 
-          EXPECTED_SHA256="640f9c91c20ef22ad98ea56dc4db86ed7a8806324cc1d3612677bc472736ec8c"
-          EXPECTED_SHA1="e0c509d9d33a2fa59d8ce58cf20c3649adb3a6ac"
+          EXPECTED_SHA256=$(echo "${RELEASE_CERT_SECRET:-62a820f073d4797e2da54338d447b0317d225f501c4e9b8811d8a30c8494ab74}" | tr '[:upper:]' '[:lower:]' | tr -d ':')
 
           echo "=========================================="
           echo "  Release APK Verification Fingerprints:  "
-          echo "  SHA-256: $ACTUAL_SHA256"
-          echo "  SHA-1:   $ACTUAL_SHA1"
-          echo "  Expected SHA-256 (v1.3.4): $EXPECTED_SHA256"
-          echo "  Expected SHA-1   (v1.3.4): $EXPECTED_SHA1"
+          echo "  Actual Certificate SHA-256:   $ACTUAL_SHA256"
+          echo "  Actual Certificate SHA-1:     $ACTUAL_SHA1"
+          echo "  Expected Permanent SHA-256:   $EXPECTED_SHA256"
           echo "=========================================="
 
           # Clean up decrypted temporary keystore immediately
           rm -f /tmp/release.keystore
 
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "::error::SIGNER MISMATCH! APK signing SHA-256 ($ACTUAL_SHA256) does not match the baseline v1.3.4 certificate ($EXPECTED_SHA256). Aborting release to prevent INSTALL_FAILED_UPDATE_INCOMPATIBLE."
+          if [ -z "$ACTUAL_SHA256" ]; then
+            echo "::error::Unable to extract certificate SHA-256 fingerprint from release APK!"
             exit 1
           fi
 
-          echo "Success: Release APK signature verified and matches v1.3.4."
+          if [ -n "$EXPECTED_SHA256" ] && [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::SIGNER MISMATCH! APK signing SHA-256 ($ACTUAL_SHA256) does not match the permanent release certificate ($EXPECTED_SHA256). Aborting release."
+            exit 1
+          fi
 
-      - name: Read app version
-        id: version
-        shell: bash
-        run: |
-          version_name=$(grep -m1 'versionName =' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
-          version_code=$(grep -m1 'versionCode =' app/build.gradle.kts | sed -E 's/[^0-9]*([0-9]+).*/\1/')
-          echo "name=$version_name" >> "$GITHUB_OUTPUT"
-          echo "code=$version_code" >> "$GITHUB_OUTPUT"
+          # Calculate APK file SHA-256 checksum
+          APK_SHA256=$(sha256sum "$apk" | awk '{print $1}')
+          echo "apk_sha256=$APK_SHA256" >> "$GITHUB_OUTPUT"
+          echo "cert_sha256=$ACTUAL_SHA256" >> "$GITHUB_OUTPUT"
+
+          # Write standalone checksum asset
+          echo "$APK_SHA256  $(basename "$apk")" > "${apk}.sha256"
+
+          echo "Success: Release APK verified with permanent signing key."
+          echo "APK File SHA-256: $APK_SHA256"
 
       - name: Publish GitHub Release
         shell: bash
@@ -127,15 +144,30 @@ jobs:
           ASSET_GLOB: ${{ steps.release_build.outputs.asset_glob }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
+          APK_SHA256: ${{ steps.verify_apk.outputs.apk_sha256 }}
+          CERT_SHA256: ${{ steps.verify_apk.outputs.cert_sha256 }}
         run: |
           tag="v${VERSION_NAME}"
           apk=$(compgen -G "$ASSET_GLOB" | head -n1)
           test -n "$apk"
+          checksum_asset="${apk}.sha256"
+
+          title="MediaAIStudio $VERSION_NAME"
+          notes=$(cat <<EOF
+MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)
+
+SHA256: $APK_SHA256
+Certificate SHA-256: $CERT_SHA256
+
+Signed with the official permanent release key.
+Note: Installations previously signed with the legacy temporary v1.3.4 debug key cannot be updated in-place and require a clean install.
+EOF
+)
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; uploading the rebuilt APK to it and keeping it as the latest normal release."
-            gh release upload "$tag" "$apk" --clobber
-            gh release edit "$tag" --prerelease=false
+            echo "Release $tag already exists; uploading rebuilt APK and checksum..."
+            gh release upload "$tag" "$apk" "$checksum_asset" --clobber
+            gh release edit "$tag" --title "$title" --notes "$notes" --prerelease=false
             exit 0
           fi
 
@@ -146,9 +178,7 @@ jobs:
             git push origin "$tag"
           fi
 
-          title="MediaAIStudio $VERSION_NAME"
-          notes="MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)\\n\\nSigned with the verified v1.3.4 compatible release certificate.\\nEnsures seamless update compatibility without INSTALL_FAILED_UPDATE_INCOMPATIBLE."
-          gh release create "$tag" "$apk" --title "$title" --notes "$notes"
+          gh release create "$tag" "$apk" "$checksum_asset" --title "$title" --notes "$notes"
 
       - name: Upload build log
         if: always()
