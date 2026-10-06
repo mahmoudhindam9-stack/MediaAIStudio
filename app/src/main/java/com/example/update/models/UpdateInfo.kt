@@ -1,24 +1,22 @@
 package com.example.update.models
 
+/**
+ * Encapsulates update metadata fetched from the distribution repository.
+ */
 data class UpdateInfo(
     val versionName: String,
-    val versionCode: Long,
+    val versionCode: Int,
     val downloadUrl: String,
-    val fileName: String,
-    val sha256: String? = null,
-    val releaseNotes: String = "",
-    val publishedAt: String = "",
+    val sha256: String?,
+    val releaseNotes: String,
+    val publishedAt: String,
     val isPrerelease: Boolean = false,
-    val assetSize: Long = 0L,
     val releaseName: String = "",
-    val tagName: String = "v$versionName",
     val releaseId: Long = 0L,
-    val htmlUrl: String = ""
+    val apkAssetSize: Long = 0L,
+    val tagName: String = "",
+    val fileName: String = ""
 ) {
-    // Backward-compatible accessors for legacy callers
     val apkAssetUrl: String get() = downloadUrl
-    val apkAssetSize: Long get() = assetSize
     val apkAssetDigest: String? get() = sha256
 }
-
-typealias ReleaseInfo = UpdateInfo
