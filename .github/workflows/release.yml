@@ -153,16 +153,7 @@ jobs:
           checksum_asset="${apk}.sha256"
 
           title="MediaAIStudio $VERSION_NAME"
-          notes=$(cat <<EOF
-MediaAIStudio $VERSION_NAME (versionCode $VERSION_CODE)
-
-SHA256: $APK_SHA256
-Certificate SHA-256: $CERT_SHA256
-
-Signed with the official permanent release key.
-Note: Installations previously signed with the legacy temporary v1.3.4 debug key cannot be updated in-place and require a clean install.
-EOF
-)
+          notes=$(printf "MediaAIStudio %s (versionCode %s)\n\nSHA256: %s\nCertificate SHA-256: %s\n\nSigned with the official permanent release key.\nNote: Installations previously signed with the legacy temporary v1.3.4 debug key cannot be updated in-place and require a clean install." "$VERSION_NAME" "$VERSION_CODE" "$APK_SHA256" "$CERT_SHA256")
 
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists; uploading rebuilt APK and checksum..."

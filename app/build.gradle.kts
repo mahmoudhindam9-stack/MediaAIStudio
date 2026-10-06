@@ -39,25 +39,70 @@ android {
     buildConfigField("String", "MEDIA_AI_BACKEND_URL", buildConfigString(backendUrl))
     buildConfigField("String", "MEDIA_AI_BACKEND_API_KEY", buildConfigString(backendApiKey))
 
+    fun getResolvedEnv(key: String): String? {
+      val envVal = System.getenv(key)
+      if (!envVal.isNullOrEmpty()) return envVal.trim()
+      val propVal = project.findProperty(key)?.toString()
+      if (!propVal.isNullOrEmpty()) return propVal.trim()
+      val rootEnvFile = rootProject.file(".env")
+      if (rootEnvFile.exists()) {
+        val line = rootEnvFile.readLines().firstOrNull {
+          val t = it.trim()
+          !t.startsWith("#") && t.contains("=") && t.split("=", limit = 2)[0].trim() == key
+        }
+        if (line != null) {
+          return line.split("=", limit = 2)[1].trim()
+        }
+      }
+      return null
+    }
+
     val permanentReleaseCertSha256 = (
-      System.getenv("RELEASE_CERT_SHA256")
-        ?: project.findProperty("RELEASE_CERT_SHA256")?.toString()
-        ?: "62a820f073d4797e2da54338d447b0317d225f501c4e9b8811d8a30c8494ab74"
+      getResolvedEnv("PERMANENT_RELEASE_CERT_SHA256")
+        ?: getResolvedEnv("RELEASE_CERT_SHA256")
+        ?: "305e793b81fc46944d01258eeeab404f77766c03f14d3f076b2ce81494d82a73"
     ).trim().lowercase().replace(":", "")
     buildConfigField("String", "PERMANENT_RELEASE_CERT_SHA256", buildConfigString(permanentReleaseCertSha256))
   }
 
+  fun getSigningEnv(key: String): String {
+    val envVal = System.getenv(key)
+    if (!envVal.isNullOrEmpty()) return envVal.trim()
+    val propVal = project.findProperty(key)?.toString()
+    if (!propVal.isNullOrEmpty()) return propVal.trim()
+    val rootEnvFile = rootProject.file(".env")
+    if (rootEnvFile.exists()) {
+      val line = rootEnvFile.readLines().firstOrNull {
+        val t = it.trim()
+        !t.startsWith("#") && t.contains("=") && t.split("=", limit = 2)[0].trim() == key
+      }
+      if (line != null) {
+        return line.split("=", limit = 2)[1].trim()
+      }
+    }
+    return ""
+  }
+
+  val releaseKeystorePath = getSigningEnv("RELEASE_KEYSTORE_PATH").ifEmpty {
+    rootProject.file("release.keystore").takeIf { it.exists() }?.absolutePath ?: ""
+  }
+  val releaseStorePassword = getSigningEnv("RELEASE_STORE_PASSWORD")
+  val releaseKeyAlias = getSigningEnv("RELEASE_KEY_ALIAS")
+  val releaseKeyPassword = getSigningEnv("RELEASE_KEY_PASSWORD")
+
+  val hasProductionSigning = releaseKeystorePath.isNotEmpty() &&
+    releaseStorePassword.isNotEmpty() &&
+    releaseKeyAlias.isNotEmpty() &&
+    releaseKeyPassword.isNotEmpty() &&
+    file(releaseKeystorePath).exists()
+
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH").orEmpty().trim()
-      val storePassword = System.getenv("RELEASE_STORE_PASSWORD").orEmpty()
-      val keyAliasValue = System.getenv("RELEASE_KEY_ALIAS").orEmpty().trim()
-      val keyPassword = System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
-      if (keystorePath.isNotEmpty() && storePassword.isNotEmpty() && keyAliasValue.isNotEmpty() && keyPassword.isNotEmpty()) {
-        storeFile = file(keystorePath)
-        this.storePassword = storePassword
-        keyAlias = keyAliasValue
-        this.keyPassword = keyPassword
+      if (hasProductionSigning) {
+        storeFile = file(releaseKeystorePath)
+        storePassword = releaseStorePassword
+        keyAlias = releaseKeyAlias
+        keyPassword = releaseKeyPassword
       }
     }
     create("debugConfig") {
@@ -67,13 +112,6 @@ android {
       keyPassword = "android"
     }
   }
-
-  val hasProductionSigning = listOf(
-    System.getenv("RELEASE_KEYSTORE_PATH").orEmpty().trim(),
-    System.getenv("RELEASE_STORE_PASSWORD").orEmpty(),
-    System.getenv("RELEASE_KEY_ALIAS").orEmpty().trim(),
-    System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
-  ).all { it.isNotEmpty() }
 
   buildTypes {
     release {
