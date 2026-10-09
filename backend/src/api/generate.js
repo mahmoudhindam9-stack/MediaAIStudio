@@ -48,6 +48,7 @@ function requestData(req) {
         filename: req.file ? req.file.filename : null,
         mimeType: req.file ? req.file.mimetype : null,
         originalName: req.file ? path.basename(req.file.originalname || 'media') : null,
+        language: String(req.body.language || 'auto'),
         parameters,
         maskData: req.body.maskData || ''
     };
@@ -68,6 +69,13 @@ router.post('/image/generate', requireAuth, upload.single('media'), (req, res) =
 router.post('/video/generate', requireAuth, upload.single('media'), (req, res) => {
     const job = JobManager.createJob(String(req.body.type || 'IMAGE_TO_VIDEO'), requestData(req));
     void GenerativeService.processVideoJob(job.id);
+    res.status(202).json({ jobId: job.id, status: job.state });
+});
+
+router.post('/video/transcribe', requireAuth, upload.single('media'), (req, res) => {
+    const data = requestData(req);
+    const job = JobManager.createJob('VIDEO_TRANSCRIBE', data);
+    void GenerativeService.processTranscriptionJob(job.id);
     res.status(202).json({ jobId: job.id, status: job.state });
 });
 

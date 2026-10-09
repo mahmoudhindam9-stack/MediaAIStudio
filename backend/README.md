@@ -6,7 +6,8 @@ This Express service is the server-side provider bridge for MediaAIStudio. Provi
 
 - POST /v1/ai/image/process — Gemini image edits and enhancement requests used by the Android cloud provider through the documented Interactions API.
 - POST /v1/ai/image/generate — asynchronous image generation and TRELLIS jobs.
-- POST /v1/ai/video/generate — Veo text/image-to-video jobs.
+- POST /v1/ai/video/generate — Veo text/image-to-video, video-to-video, and source-video extension jobs.
+- POST /v1/ai/video/transcribe — Gemini video speech transcription with an optional language hint.
 - GET /v1/ai/jobs/:jobId and GET /v1/ai/files/:filename — job state and authenticated generated outputs.
 - GET /health — basic service health.
 
@@ -22,6 +23,7 @@ Copy backend/.env.example to backend/.env. Set:
 - FAL_KEY: fal API key for hosted TRELLIS image-to-3D.
 - IMAGE_MODEL: defaults to gemini-3.1-flash-image.
 - VIDEO_MODEL: defaults to veo-3.1-fast-generate-preview.
+- TRANSCRIPTION_MODEL: defaults to gemini-3.8-flash for video transcription.
 - TRELLIS_MODEL_ID: defaults to fal-ai/trellis.
 
 Set Android build variables MEDIA_AI_BACKEND_URL=https://your-api.example.com/v1/ai and MEDIA_AI_BACKEND_API_KEY to the same app token. The provider keys GEMINI_API_KEY and FAL_KEY must remain only in the backend environment. Do not add them to the Android app .env or package them into the APK.
@@ -29,6 +31,8 @@ Set Android build variables MEDIA_AI_BACKEND_URL=https://your-api.example.com/v1
 ## TRELLIS notes
 
 TRELLIS is a hosted image-to-3D operation. The app requests consent before upload, shows job progress, and can save the completed mesh as a .glb file. The backend submits the image to the fal-ai/trellis queue, polls the job, downloads the mesh, and serves it via the authenticated files route.
+
+Video-to-video and video extension pass the original video to Veo; extension is subject to the upstream model's requirement that the clip be Veo-generated and within the provider's supported duration/resolution window. Inline video upload is limited to small source clips.
 
 The upstream Microsoft TRELLIS project needs a Linux/CUDA/NVIDIA GPU environment for self-hosting; this app intentionally calls a hosted inference provider rather than downloading large model weights to the phone.
 

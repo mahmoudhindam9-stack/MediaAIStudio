@@ -311,6 +311,7 @@ async function processImageJob(jobId) {
 async function processVideoJob(jobId) {
     const job = JobManager.getJob(jobId);
     if (!job) return;
+
     try {
         const apiKey = getGoogleApiKey();
         if (!apiKey) {
@@ -318,34 +319,75 @@ async function processVideoJob(jobId) {
         }
 
         const requestType = String(job.type || '').toUpperCase();
-        if (requestType === 'VIDEO_TO_VIDEO' || requestType === 'VIDEO_EXTENSION') {
-            throw Object.assign(
-                new Error('This build currently supports Veo text/image-to-video. Video-to-video and video extension need a dedicated model workflow.'),
-                { code: 'VIDEO_OPERATION_NOT_SUPPORTED' }
-            );
+        const videoInputMode = requestType === 'VIDEO_TO_VIDEO' || requestType === 'VIDEO_EXTENSION';
+        const source = await readSource(job);
+        const parameters = job.request.parameters || {};
+        let prompt = String(job.request.prompt || '');
+
+        if (!prompt) {
+            if (requestType === 'VIDEO_EXTENSION') {
+                prompt = 'Continue and naturally extend this Veo-generated video. Preserve its visual style, subjects, lighting, and motion continuity.';
+            } else if (requestType === 'VIDEO_TO_VIDEO') {
+                prompt = 'Create a video transformation guided by the supplied source footage. Preserve important subjects and temporal continuity.';
+            } else {
+                prompt = 'Create a short, cinematic video based on the supplied image.';
+            }
         }
 
-        const source = await readSource(job);
-        const prompt = String(job.request.prompt || 'Create a short, cinematic video based on the supplied image.');
         const instance = { prompt };
+        const generationParameters = {};
 
         if (source) {
-            if (!source.mimeType.startsWith('image/')) {
-                throw Object.assign(new Error('Veo image-to-video requires an image input in this build.'), { code: 'INVALID_MEDIA_TYPE' });
+            if (videoInputMode) {
+                if (!source.mimeType.startsWith('video/')) {
+                    throw Object.assign(new Error('Video-to-video and video extension require a video input.'), { code: 'INVALID_MEDIA_TYPE' });
+                }
+                if (source.buffer.length > 14 * 1024 * 1024) {
+                    throw Object.assign(new Error('Video input exceeds the 14 MB inline-request limit. Use a shorter or smaller video.'), { code: 'INPUT_TOO_LARGE' });
+                }
+                instance.video = {
+                    inlineData: {
+                        mimeType: source.mimeType,
+                        data: source.buffer.toString('base64')
+                    }
+                };
+                // Veo video extension is currently limited to 720p input/output.
+                generationParameters.resolution = '720p';
+            } else {
+                if (!source.mimeType.startsWith('image/')) {
+                    throw Object.assign(new Error('Veo text-to-video or image-to-video requires an image input, not a video.'), { code: 'INVALID_MEDIA_TYPE' });
+                }
+                if (source.buffer.length > 14 * 1024 * 1024) {
+                    throw Object.assign(new Error('Image input exceeds the 14 MB inline-request limit.'), { code: 'INPUT_TOO_LARGE' });
+                }
+                instance.image = {
+                    bytesBase64Encoded: source.buffer.toString('base64'),
+                    mimeType: source.mimeType
+                };
+                const requestedResolution = String(parameters.param_resolution || parameters.resolution || '');
+                if (['720p', '1080p', '4k'].includes(requestedResolution)) {
+                    generationParameters.resolution = requestedResolution;
+                }
             }
-            instance.image = {
-                bytesBase64Encoded: source.buffer.toString('base64'),
-                mimeType: source.mimeType
-            };
+        } else if (videoInputMode) {
+            throw Object.assign(new Error('Video-to-video and video extension require a source video.'), { code: 'VIDEO_REQUIRED' });
+        } else {
+            const requestedResolution = String(parameters.param_resolution || parameters.resolution || '');
+            if (['720p', '1080p', '4k'].includes(requestedResolution)) {
+                generationParameters.resolution = requestedResolution;
+            }
         }
 
-        JobManager.updateJob(jobId, 'PREPARING', 0.1, 'Submitting video request to Veo…');
+        JobManager.updateJob(jobId, 'PREPARING', 0.1, videoInputMode ? 'Preparing source video for Veo…' : 'Submitting video request to Veo…');
+        const requestBody = { instances: [instance] };
+        if (Object.keys(generationParameters).length) requestBody.parameters = generationParameters;
+
         const response = await fetch(
             GEMINI_BASE_URL + '/models/' + encodeURIComponent(VIDEO_MODEL) + ':predictLongRunning',
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-                body: JSON.stringify({ instances: [instance] })
+                body: JSON.stringify(requestBody)
             }
         );
 
@@ -361,7 +403,6 @@ async function processVideoJob(jobId) {
 
         let finished = false;
         let videoUrl = null;
-
         for (let attempt = 0; attempt < 120; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, 5000));
             const poll = await fetch(
@@ -383,17 +424,10 @@ async function processVideoJob(jobId) {
                 if (operation.error) {
                     throw Object.assign(new Error(operation.error.message || 'Veo generation failed.'), { code: 'VEO_GENERATION_FAILED' });
                 }
-                videoUrl = operation.response &&
-                    ((operation.response.generateVideoResponse &&
-                      operation.response.generateVideoResponse.generatedSamples &&
-                      operation.response.generateVideoResponse.generatedSamples[0] &&
-                      operation.response.generateVideoResponse.generatedSamples[0].video &&
-                      operation.response.generateVideoResponse.generatedSamples[0].video.uri) ||
-                     (operation.response.generateVideoResponse &&
-                      operation.response.generateVideoResponse.generatedVideos &&
-                      operation.response.generateVideoResponse.generatedVideos[0] &&
-                      operation.response.generateVideoResponse.generatedVideos[0].video &&
-                      operation.response.generateVideoResponse.generatedVideos[0].video.uri));
+                const result = operation.response && operation.response.generateVideoResponse;
+                const sample = result && result.generatedSamples && result.generatedSamples[0];
+                const generated = result && result.generatedVideos && result.generatedVideos[0];
+                videoUrl = (sample && sample.video && sample.video.uri) || (generated && generated.video && generated.video.uri) || null;
                 finished = true;
                 break;
             }
@@ -424,4 +458,86 @@ async function processVideoJob(jobId) {
     }
 }
 
-module.exports = { processImageJob, processVideoJob };
+async function processTranscriptionJob(jobId) {
+    const job = JobManager.getJob(jobId);
+    if (!job) return;
+
+    try {
+        const apiKey = getGoogleApiKey();
+        if (!apiKey) {
+            throw Object.assign(new Error('Configure GEMINI_API_KEY on the backend.'), { code: 'PROVIDER_NOT_CONFIGURED' });
+        }
+        const source = await readSource(job);
+        if (!source || !source.mimeType.startsWith('video/')) {
+            throw Object.assign(new Error('Video transcription requires a video file.'), { code: 'INVALID_MEDIA_TYPE' });
+        }
+        // Inline Gemini video requests are kept small to remain below request-size limits.
+        if (source.buffer.length > 14 * 1024 * 1024) {
+            throw Object.assign(new Error('Video exceeds the 14 MB inline transcription limit. Use a shorter or smaller clip.'), { code: 'INPUT_TOO_LARGE' });
+        }
+
+        const language = String(job.request.language || 'auto').trim() || 'auto';
+        const languageInstruction = language.toLowerCase() === 'auto'
+            ? 'Automatically identify the spoken language and transcribe in that language.'
+            : 'Transcribe the speech in ' + language + '. Preserve the original spoken language; do not translate.';
+
+        JobManager.updateJob(jobId, 'PREPARING', 0.1, 'Preparing video transcription request…');
+        const response = await fetch(
+            GEMINI_BASE_URL + '/models/' + encodeURIComponent(process.env.TRANSCRIPTION_MODEL || 'gemini-3.8-flash') + ':generateContent',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+                body: JSON.stringify({
+                    contents: [{
+                        role: 'user',
+                        parts: [
+                            {
+                                text: 'Transcribe all intelligible spoken dialogue in this video. ' +
+                                    languageInstruction +
+                                    ' Include speaker labels when distinguishable and timestamps when useful. ' +
+                                    'Return the transcript only, not a summary.'
+                            },
+                            {
+                                inlineData: {
+                                    mimeType: source.mimeType,
+                                    data: source.buffer.toString('base64')
+                                }
+                            }
+                        ]
+                    }]
+                })
+            }
+        );
+
+        const responseText = await response.text();
+        let data;
+        try { data = JSON.parse(responseText); } catch { data = {}; }
+        if (!response.ok) {
+            throw Object.assign(
+                new Error((data.error && data.error.message) || 'Gemini transcription failed (HTTP ' + response.status + ').'),
+                { code: 'TRANSCRIPTION_REQUEST_FAILED' }
+            );
+        }
+
+        const parts = (data.candidates || []).flatMap(candidate => (candidate.content && candidate.content.parts) || []);
+        const transcript = parts.map(part => part.text || '').filter(Boolean).join('\n').trim();
+        if (!transcript) {
+            throw Object.assign(new Error('Gemini returned no transcript.'), { code: 'EMPTY_TRANSCRIPT' });
+        }
+
+        JobManager.updateJob(jobId, 'COMPLETED', 1, 'Video transcription complete.', {
+            transcript,
+            text: transcript,
+            language,
+            provider: 'Gemini'
+        });
+    } catch (error) {
+        updateFailure(jobId, error.code || 'TRANSCRIPTION_FAILED', error.message || 'Video transcription failed.');
+    } finally {
+        if (job.request.filename) {
+            await fs.promises.unlink(getFilePath(path.basename(job.request.filename))).catch(() => {});
+        }
+    }
+}
+
+module.exports = { processImageJob, processVideoJob, processTranscriptionJob };
