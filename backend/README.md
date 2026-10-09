@@ -4,7 +4,7 @@ This Express service is the server-side provider bridge for MediaAIStudio. Provi
 
 ## Implemented routes
 
-- POST /v1/ai/image/process — Gemini image edits and enhancement requests used by the Android cloud provider.
+- POST /v1/ai/image/process — Gemini image edits and enhancement requests used by the Android cloud provider through the documented Interactions API.
 - POST /v1/ai/image/generate — asynchronous image generation and TRELLIS jobs.
 - POST /v1/ai/video/generate — Veo text/image-to-video jobs.
 - GET /v1/ai/jobs/:jobId and GET /v1/ai/files/:filename — job state and authenticated generated outputs.

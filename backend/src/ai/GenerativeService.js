@@ -6,7 +6,7 @@ const { getFilePath, STORAGE_DIR } = require('../storage/StorageManager');
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
-const IMAGE_MODEL = (process.env.IMAGE_MODEL || 'gemini-3.1-flash-image').replace(/^models\//, '');
+const IMAGE_MODEL = (process.env.IMAGE_MODEL || 'gemini-nano-banana-2.1').replace(/^models\//, '');
 const VIDEO_MODEL = (process.env.VIDEO_MODEL || 'veo-3.1-fast-generate-preview').replace(/^models\//, '');
 const TRELLIS_MODEL_ID = process.env.TRELLIS_MODEL_ID || 'fal-ai/trellis';
 const MAX_TRELLIS_POLLS = Number(process.env.TRELLIS_MAX_POLLS || 180);
@@ -78,7 +78,7 @@ async function processWithGemini(jobId, job) {
     }
 
     JobManager.updateJob(jobId, 'PREPARING', 0.12, 'Preparing Gemini image request…');
-    const parts = [{ text: buildImagePrompt(job.request) }];
+    const input = [{ type: 'text', text: buildImagePrompt(job.request) }];
     const source = await readSource(job);
 
     if (source) {
@@ -88,29 +88,26 @@ async function processWithGemini(jobId, job) {
         if (source.buffer.length > 20 * 1024 * 1024) {
             throw Object.assign(new Error('Input image exceeds the 20 MB processing limit.'), { code: 'INPUT_TOO_LARGE' });
         }
-        parts.push({
-            inlineData: {
-                mimeType: source.mimeType,
-                data: source.buffer.toString('base64')
-            }
+        input.push({
+            type: 'image',
+            mime_type: source.mimeType,
+            data: source.buffer.toString('base64')
         });
     }
 
     JobManager.updateJob(jobId, 'PROCESSING', 0.35, 'Processing with Gemini…');
-    const response = await fetch(
-        GEMINI_BASE_URL + '/models/' + encodeURIComponent(IMAGE_MODEL) + ':generateContent',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-goog-api-key': apiKey
-            },
-            body: JSON.stringify({
-                contents: [{ role: 'user', parts }],
-                generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
-            })
-        }
-    );
+    const response = await fetch(GEMINI_BASE_URL + '/interactions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+        },
+        body: JSON.stringify({
+            model: IMAGE_MODEL,
+            input,
+            response_format: { type: 'image' }
+        })
+    });
 
     const bodyText = await response.text();
     let data;
@@ -118,24 +115,31 @@ async function processWithGemini(jobId, job) {
 
     if (!response.ok) {
         throw Object.assign(
-            new Error(data.error && data.error.message ? data.error.message : 'Gemini request failed (HTTP ' + response.status + ').'),
+            new Error(data.error && data.error.message ? data.error.message : 'Gemini image request failed (HTTP ' + response.status + ').'),
             { code: 'GEMINI_REQUEST_FAILED' }
         );
     }
 
-    const responseParts = (data.candidates || []).flatMap(candidate => (candidate.content && candidate.content.parts) || []);
-    const imagePart = responseParts.find(part => (part.inlineData && part.inlineData.data) || (part.inline_data && part.inline_data.data));
-    if (!imagePart) {
-        const textPart = responseParts.find(part => part.text);
+    // Interactions returns image data through output_image or an image block in output.
+    const outputSteps = Array.isArray(data.output) ? data.output : [];
+    const imagePart = data.output_image ||
+        outputSteps.slice().reverse().find(part =>
+            part && part.type === 'image' && (part.data || part.image || part.content)
+        );
+
+    const nestedImage = imagePart && (imagePart.image || imagePart.content);
+    const encoded = imagePart && (imagePart.data || (nestedImage && nestedImage.data));
+    if (!encoded) {
+        const textOutput = data.output_text ||
+            outputSteps.slice().reverse().find(part => part && part.type === 'text')?.text;
         throw Object.assign(
-            new Error((textPart && textPart.text) || 'Gemini returned no image. Check model access and supported input.'),
+            new Error(textOutput || 'Gemini returned no image. Check API access, model availability, and image input.'),
             { code: 'NO_IMAGE_OUTPUT' }
         );
     }
 
-    const encoded = (imagePart.inlineData && imagePart.inlineData.data) || imagePart.inline_data.data;
-    const mimeType = (imagePart.inlineData && imagePart.inlineData.mimeType) ||
-        (imagePart.inline_data && imagePart.inline_data.mime_type) || 'image/png';
+    const mimeType = imagePart.mime_type || imagePart.mimeType ||
+        (nestedImage && (nestedImage.mime_type || nestedImage.mimeType)) || 'image/png';
     const extension = mimeType.toLowerCase().includes('jpeg') ? '.jpg'
         : mimeType.toLowerCase().includes('webp') ? '.webp' : '.png';
     const output = await saveOutput(Buffer.from(encoded, 'base64'), extension);
@@ -143,7 +147,8 @@ async function processWithGemini(jobId, job) {
     JobManager.updateJob(jobId, 'COMPLETED', 1, 'Gemini image processing complete.', {
         outputUrl: output.outputUrl,
         filename: output.filename,
-        mimeType
+        mimeType,
+        provider: IMAGE_MODEL
     });
 }
 
