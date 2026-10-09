@@ -38,7 +38,7 @@ class CloudGenerativeClient(
     private val apiKey = BuildConfig.MEDIA_AI_BACKEND_API_KEY.trim()
 
     val isConfigured: Boolean
-        get() = baseUrl.isNotBlank()
+        get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
 
     suspend fun processImageRequest(
         request: AIRequest,
@@ -408,10 +408,12 @@ class CloudGenerativeClient(
             }
 
     private fun isBackendUrl(url: String): Boolean {
-        val backendHost = Uri.parse(baseUrl).host
-        val requestHost = Uri.parse(url).host
-        return !backendHost.isNullOrBlank() &&
-            requestHost?.equals(backendHost, ignoreCase = true) == true
+        val backend = Uri.parse(baseUrl)
+        val request = Uri.parse(url)
+        return !backend.host.isNullOrBlank() &&
+            backend.scheme.equals(request.scheme, ignoreCase = true) &&
+            backend.host.equals(request.host, ignoreCase = true) &&
+            backend.port == request.port
     }
 
     private fun execute(request: Request): JSONObject {

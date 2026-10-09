@@ -270,7 +270,7 @@ async function processTrellisImageTo3D(jobId, job) {
         throw Object.assign(new Error('TRELLIS output is empty or exceeds the 150 MB limit.'), { code: 'TRELLIS_OUTPUT_TOO_LARGE' });
     }
 
-    const providerFileName = String(mesh.file_name || mesh.filename || '');
+    const providerFileName = String(mesh.file_name || mesh.filename || new URL(meshUrl).pathname);
     const providerExt = path.extname(providerFileName).toLowerCase();
     const extension = ['.glb', '.gltf', '.obj', '.ply'].includes(providerExt) ? providerExt : '.glb';
     const output = await saveOutput(outputBytes, extension);

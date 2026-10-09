@@ -10,7 +10,7 @@ const { STORAGE_DIR, getFilePath } = require('../storage/StorageManager');
 const router = express.Router();
 const upload = multer({
     dest: STORAGE_DIR,
-    limits: { fileSize: 12 * 1024 * 1024, files: 2 }
+    limits: { fileSize: 20 * 1024 * 1024, files: 2 }
 });
 
 function requireAuth(req, res, next) {
