@@ -7,12 +7,12 @@ const { initStorage } = require('./storage/StorageManager');
 function isConfiguredSecret(value) {
     const normalized = String(value || '').trim();
     return normalized.length > 0 &&
-        !/^(?:replace[-_ ]?with|change[-_ ]?me|your[-_ ]|placeholder\\b)/i.test(normalized);
+        !/^(?:replace[-_ ]?with|change[-_ ]?me|your[-_ ]|placeholder\b)/i.test(normalized);
 }
 
 function isPublicBaseUrlConfigured(value) {
     const normalized = String(value || '').trim();
-    if (!normalized || /example\\.com|your-ai-backend/i.test(normalized)) return false;
+    if (!normalized || /example\.com|your-ai-backend/i.test(normalized)) return false;
     try {
         const parsed = new URL(normalized);
         return parsed.protocol === 'https:' &&

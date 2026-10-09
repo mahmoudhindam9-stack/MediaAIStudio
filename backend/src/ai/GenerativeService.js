@@ -47,13 +47,13 @@ function decodeMaskImage(maskData) {
     const raw = String(maskData || '').trim();
     if (!raw) return null;
 
-    const dataUri = raw.match(/^data:(image\\/[A-Za-z0-9.+-]+);base64,([\\s\\S]+)$/i);
+    const dataUri = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\\S]+)$/i);
     if (raw.startsWith('data:') && !dataUri) {
         throw Object.assign(new Error('The selection mask must be a base64-encoded image.'), { code: 'INVALID_MASK_DATA' });
     }
 
     const mimeType = dataUri ? dataUri[1].toLowerCase() : 'image/png';
-    const encoded = (dataUri ? dataUri[2] : raw).replace(/\\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    const encoded = (dataUri ? dataUri[2] : raw).replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
     if (!encoded || encoded.length > 14 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
         throw Object.assign(new Error('The selection mask is invalid or exceeds the 10 MB limit.'), { code: 'INVALID_MASK_DATA' });
     }
