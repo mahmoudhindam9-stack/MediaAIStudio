@@ -321,6 +321,9 @@ async function processVideoJob(jobId) {
         const requestType = String(job.type || '').toUpperCase();
         const videoInputMode = requestType === 'VIDEO_TO_VIDEO' || requestType === 'VIDEO_EXTENSION';
         const source = await readSource(job);
+        if (requestType === 'IMAGE_TO_VIDEO' && !source) {
+            throw Object.assign(new Error('Veo image-to-video requires a source image.'), { code: 'IMAGE_REQUIRED' });
+        }
         const parameters = job.request.parameters || {};
         let prompt = String(job.request.prompt || '');
 

@@ -92,10 +92,10 @@ class CloudGenerativeClient(
     }
 
     suspend fun submitImageJob(request: GenerativeRequest): String? =
-        submitGenerativeJob("/image/generate", request, "image/*")
+        submitGenerativeJob("/image/generate", request, "image/jpeg")
 
     suspend fun submitVideoJob(request: GenerativeRequest): String? =
-        submitGenerativeJob("/video/generate", request, "video/*")
+        submitGenerativeJob("/video/generate", request, "video/mp4")
 
     private suspend fun submitGenerativeJob(
         endpoint: String,
