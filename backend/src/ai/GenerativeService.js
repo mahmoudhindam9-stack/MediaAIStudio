@@ -548,8 +548,8 @@ async function processTranscriptionJob(jobId) {
                             {
                                 text: 'Transcribe all intelligible spoken dialogue in this video. ' +
                                     languageInstruction +
-                                    ' Include speaker labels when distinguishable and timestamps when useful. ' +
-                                    'Return the transcript only, not a summary.'
+                                    ' Return JSON matching the response schema. Each segment must include accurate startMs and endMs timestamps as integers in milliseconds, and its spoken text. ' +
+                                    'Keep segments in chronological order, split speech into short subtitle-sized segments, and do not include a summary.'
                             },
                             {
                                 inlineData: {
@@ -559,7 +559,29 @@ async function processTranscriptionJob(jobId) {
                             }
                         ]
                     }]
-                })
+                }),
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    responseSchema: {
+                        type: 'OBJECT',
+                        properties: {
+                            language: { type: 'STRING' },
+                            segments: {
+                                type: 'ARRAY',
+                                items: {
+                                    type: 'OBJECT',
+                                    properties: {
+                                        startMs: { type: 'INTEGER' },
+                                        endMs: { type: 'INTEGER' },
+                                        text: { type: 'STRING' }
+                                    },
+                                    required: ['startMs', 'endMs', 'text']
+                                }
+                            }
+                        },
+                        required: ['language', 'segments']
+                    }
+                }
             }
         );
 
@@ -574,15 +596,35 @@ async function processTranscriptionJob(jobId) {
         }
 
         const parts = (data.candidates || []).flatMap(candidate => (candidate.content && candidate.content.parts) || []);
-        const transcript = parts.map(part => part.text || '').filter(Boolean).join('\n').trim();
-        if (!transcript) {
-            throw Object.assign(new Error('Gemini returned no transcript.'), { code: 'EMPTY_TRANSCRIPT' });
+        const structuredText = parts.map(part => part.text || '').filter(Boolean).join(String.fromCharCode(10)).trim();
+        let transcription;
+        try {
+            transcription = JSON.parse(structuredText);
+        } catch {
+            throw Object.assign(new Error('Gemini returned invalid timed-caption JSON. Please retry.'), { code: 'INVALID_TRANSCRIPT_FORMAT' });
         }
 
+        const segments = (Array.isArray(transcription.segments) ? transcription.segments : [])
+            .slice(0, 2000)
+            .map(segment => ({
+                startMs: Number(segment.startMs),
+                endMs: Number(segment.endMs),
+                text: String(segment.text || '').trim()
+            }))
+            .filter(segment => Number.isFinite(segment.startMs) && Number.isFinite(segment.endMs) &&
+                segment.startMs >= 0 && segment.endMs > segment.startMs && segment.text.length > 0)
+            .sort((a, b) => a.startMs - b.startMs);
+
+        if (!segments.length) {
+            throw Object.assign(new Error('Gemini returned no valid timed subtitle segments.'), { code: 'EMPTY_TRANSCRIPT' });
+        }
+
+        const transcript = segments.map(segment => segment.text).join(String.fromCharCode(10));
         JobManager.updateJob(jobId, 'COMPLETED', 1, 'Video transcription complete.', {
             transcript,
             text: transcript,
-            language,
+            language: String(transcription.language || language),
+            segments,
             provider: 'Gemini'
         });
     } catch (error) {
