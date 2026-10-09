@@ -10,6 +10,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      MEDIA_AI_BACKEND_URL: ${{ secrets.MEDIA_AI_BACKEND_URL }}
+      MEDIA_AI_BACKEND_API_KEY: ${{ secrets.MEDIA_AI_BACKEND_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
