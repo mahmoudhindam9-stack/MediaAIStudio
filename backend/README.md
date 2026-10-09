@@ -21,7 +21,7 @@ Copy backend/.env.example to backend/.env. Set:
 - PUBLIC_BASE_URL: public origin of this backend, e.g. https://your-api.example.com (no /v1/ai suffix).
 - GEMINI_API_KEY: Google AI Studio key for Gemini image processing and Veo video generation. GOOGLE_AI_API_KEY remains supported as an alias.
 - FAL_KEY: fal API key for hosted TRELLIS image-to-3D.
-- IMAGE_MODEL: defaults to gemini-3.1-flash-image.
+- IMAGE_MODEL: defaults to gemini-nano-banana-2.1.
 - VIDEO_MODEL: defaults to veo-3.1-fast-generate-preview.
 - TRANSCRIPTION_MODEL: defaults to gemini-3.8-flash for video transcription.
 - TRELLIS_MODEL_ID: defaults to fal-ai/trellis.

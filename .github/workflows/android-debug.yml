@@ -17,6 +17,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate backend JavaScript syntax
+        run: |
+          node --check backend/src/index.js
+          node --check backend/src/api/generate.js
+          node --check backend/src/ai/GenerativeService.js
+          node --check backend/src/jobs/JobManager.js
+          node --check backend/src/storage/StorageManager.js
+
       - name: Restore debug keystore
         shell: bash
         run: |

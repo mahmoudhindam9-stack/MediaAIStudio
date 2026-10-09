@@ -19,7 +19,7 @@ app.use('/v1/ai', apiRoutes);
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
-        imageModel: process.env.IMAGE_MODEL || 'gemini-3.1-flash-image',
+        imageModel: process.env.IMAGE_MODEL || 'gemini-nano-banana-2.1',
         videoModel: process.env.VIDEO_MODEL || 'veo-3.1-fast-generate-preview',
         backendAuthConfigured: Boolean(process.env.MEDIA_AI_BACKEND_API_KEY),
         providers: {

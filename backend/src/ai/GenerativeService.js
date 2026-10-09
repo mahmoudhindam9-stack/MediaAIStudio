@@ -364,8 +364,10 @@ async function processVideoJob(jobId) {
                     throw Object.assign(new Error('Image input exceeds the 14 MB inline-request limit.'), { code: 'INPUT_TOO_LARGE' });
                 }
                 instance.image = {
-                    bytesBase64Encoded: source.buffer.toString('base64'),
-                    mimeType: source.mimeType
+                    inlineData: {
+                        mimeType: source.mimeType,
+                        data: source.buffer.toString('base64')
+                    }
                 };
                 const requestedResolution = String(parameters.param_resolution || parameters.resolution || '');
                 if (['720p', '1080p', '4k'].includes(requestedResolution)) {

@@ -20,6 +20,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate backend JavaScript syntax
+        run: |
+          node --check backend/src/index.js
+          node --check backend/src/api/generate.js
+          node --check backend/src/ai/GenerativeService.js
+          node --check backend/src/jobs/JobManager.js
+          node --check backend/src/storage/StorageManager.js
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
