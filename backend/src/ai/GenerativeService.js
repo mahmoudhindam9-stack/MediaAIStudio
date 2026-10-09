@@ -43,6 +43,28 @@ async function saveOutput(buffer, extension) {
     return { filename, outputUrl: publicOutputUrl(filename) };
 }
 
+function decodeMaskImage(maskData) {
+    const raw = String(maskData || '').trim();
+    if (!raw) return null;
+
+    const dataUri = raw.match(/^data:(image\\/[A-Za-z0-9.+-]+);base64,([\\s\\S]+)$/i);
+    if (raw.startsWith('data:') && !dataUri) {
+        throw Object.assign(new Error('The selection mask must be a base64-encoded image.'), { code: 'INVALID_MASK_DATA' });
+    }
+
+    const mimeType = dataUri ? dataUri[1].toLowerCase() : 'image/png';
+    const encoded = (dataUri ? dataUri[2] : raw).replace(/\\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (!encoded || encoded.length > 14 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+        throw Object.assign(new Error('The selection mask is invalid or exceeds the 10 MB limit.'), { code: 'INVALID_MASK_DATA' });
+    }
+
+    const buffer = Buffer.from(encoded, 'base64');
+    if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+        throw Object.assign(new Error('The selection mask is empty or exceeds the 10 MB limit.'), { code: 'INVALID_MASK_DATA' });
+    }
+    return { type: 'image', mime_type: mimeType, data: buffer.toString('base64') };
+}
+
 function buildImagePrompt(request) {
     const operation = String(request.operation || request.type || 'IMAGE_GEN').toUpperCase();
     const userPrompt = String(request.prompt || '').trim();
@@ -93,6 +115,17 @@ async function processWithGemini(jobId, job) {
             mime_type: source.mimeType,
             data: source.buffer.toString('base64')
         });
+    }
+
+    const operation = String(job.request.operation || job.request.type || '').toUpperCase();
+    const maskData = String(job.request.maskData || '').trim();
+    if (maskData && (operation.includes('OBJECTREMOVAL') || operation.includes('OBJECT_REMOVAL') ||
+        operation === 'FILL' || operation.includes('GENERATIVE_FILL'))) {
+        input.push({
+            type: 'text',
+            text: 'The next image is a selection mask from the user. Use it only as a guide to identify the exact region to remove or edit in the source image. Preserve all unmarked areas; do not reproduce the mask as part of the result.'
+        });
+        input.push(decodeMaskImage(maskData));
     }
 
     JobManager.updateJob(jobId, 'PROCESSING', 0.35, 'Processing with Gemini…');

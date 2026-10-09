@@ -37,8 +37,29 @@ class CloudGenerativeClient(
     private val baseUrl = BuildConfig.MEDIA_AI_BACKEND_URL.trimEnd('/')
     private val apiKey = BuildConfig.MEDIA_AI_BACKEND_API_KEY.trim()
 
+    private fun isPlaceholder(value: String): Boolean {
+        val normalized = value.trim().lowercase()
+        return normalized.isBlank() ||
+            normalized.startsWith("replace-with") ||
+            normalized.startsWith("change-me") ||
+            normalized.startsWith("your-") ||
+            normalized.startsWith("placeholder") ||
+            normalized.contains("example.com")
+    }
+
+    private fun hasUsableBackendUrl(): Boolean {
+        if (isPlaceholder(baseUrl)) return false
+        val parsed = runCatching { Uri.parse(baseUrl) }.getOrNull() ?: return false
+        val host = parsed.host?.lowercase().orEmpty()
+        if (host.isBlank()) return false
+        if (parsed.scheme.equals("https", ignoreCase = true)) return true
+        // Permit HTTP only for explicit local development targets.
+        return parsed.scheme.equals("http", ignoreCase = true) &&
+            host in setOf("localhost", "127.0.0.1", "10.0.2.2")
+    }
+
     val isConfigured: Boolean
-        get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
+        get() = hasUsableBackendUrl() && !isPlaceholder(apiKey)
 
     suspend fun processImageRequest(
         request: AIRequest,

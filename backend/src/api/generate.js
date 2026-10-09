@@ -7,6 +7,12 @@ const JobManager = require('../jobs/JobManager');
 const GenerativeService = require('../ai/GenerativeService');
 const { STORAGE_DIR, getFilePath } = require('../storage/StorageManager');
 
+function isConfiguredSecret(value) {
+    const normalized = String(value || '').trim();
+    return normalized.length > 0 &&
+        !/^(?:replace[-_ ]?with|change[-_ ]?me|your[-_ ]|placeholder\\b)/i.test(normalized);
+}
+
 const router = express.Router();
 const upload = multer({
     dest: STORAGE_DIR,
@@ -15,7 +21,7 @@ const upload = multer({
 
 function requireAuth(req, res, next) {
     const expected = process.env.MEDIA_AI_BACKEND_API_KEY || '';
-    if (!expected) {
+    if (!isConfiguredSecret(expected)) {
         return res.status(503).json({
             error: 'AUTH_NOT_CONFIGURED',
             message: 'Set MEDIA_AI_BACKEND_API_KEY on the backend before enabling AI requests.'
