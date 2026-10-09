@@ -822,6 +822,7 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private val importedGenerativeJobIds = mutableSetOf<String>()
+    private val veoGeneratedVideoUris = mutableSetOf<String>()
 
     fun isGenerativeVideoType(type: GenerativeType): Boolean = type.isVideoOutput
 
@@ -858,6 +859,9 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
                     rotation = metadata.rotation,
                     isImage = metadata.isImage
                 )
+                if (job.request.type.isVideoOutput && !metadata.isImage) {
+                    veoGeneratedVideoUris.add(persistedUri)
+                }
 
                 val current = _state.value
                 val (recalculatedClips, totalDuration) =
@@ -944,15 +948,39 @@ class VideoEditorViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
     fun runGenerativeVideo(type: GenerativeType, prompt: String) {
-        val uri = _state.value.videoClips.firstOrNull()?.uri
-        if (uri == null) {
-            viewModelScope.launch { _aiMessages.emit("No source video for generation") }
+        val current = _state.value
+        val selectedClip = current.videoClips.firstOrNull { it.id == current.selectedItemId }
+        val sourceClip = when (type) {
+            GenerativeType.IMAGE_TO_VIDEO ->
+                selectedClip?.takeIf { it.isImage } ?: current.videoClips.firstOrNull { it.isImage }
+            GenerativeType.VIDEO_TO_VIDEO, GenerativeType.VIDEO_EXTENSION ->
+                selectedClip?.takeIf { !it.isImage } ?: current.videoClips.firstOrNull { !it.isImage }
+            else -> selectedClip ?: current.videoClips.firstOrNull()
+        }
+        if (sourceClip == null) {
+            val message = if (type == GenerativeType.IMAGE_TO_VIDEO) {
+                "Image → Video needs an image clip. Add or select an image on the timeline first."
+            } else {
+                "This operation needs a video clip. Add or select a video on the timeline first."
+            }
+            viewModelScope.launch { _aiMessages.emit(message) }
+            return
+        }
+
+        if ((type == GenerativeType.VIDEO_TO_VIDEO || type == GenerativeType.VIDEO_EXTENSION) &&
+            sourceClip.uri !in veoGeneratedVideoUris) {
+            viewModelScope.launch {
+                _aiMessages.emit(
+                    "Veo only supports video-to-video/extension from a Veo-generated clip. " +
+                        "Generate an Image → Video clip, add it to the timeline, select it, then retry."
+                )
+            }
             return
         }
 
         val req = GenerativeRequest(
             type = type,
-            sourceUri = Uri.parse(uri),
+            sourceUri = Uri.parse(sourceClip.uri),
             prompt = prompt
         )
         val jobId = generativeEngine.submitJob(req)
