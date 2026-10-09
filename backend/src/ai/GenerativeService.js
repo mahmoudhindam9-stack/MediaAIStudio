@@ -47,7 +47,7 @@ function decodeMaskImage(maskData) {
     const raw = String(maskData || '').trim();
     if (!raw) return null;
 
-    const dataUri = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\\S]+)$/i);
+    const dataUri = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/i);
     if (raw.startsWith('data:') && !dataUri) {
         throw Object.assign(new Error('The selection mask must be a base64-encoded image.'), { code: 'INVALID_MASK_DATA' });
     }
