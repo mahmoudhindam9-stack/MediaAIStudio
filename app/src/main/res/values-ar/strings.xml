@@ -106,4 +106,20 @@
 
     <string name="ai_cloud_privacy_consent">تتطلب هذه العملية السحابة. سيتم تحميل الوسائط بأمان، وسيتم استخدام حصة المزود. هل توافق؟</string>
     <string name="ai_offline_warning">المعالجة السحابية غير متوفرة دون اتصال بالإنترنت.</string>
+    <string name="trellis_title">Trellis — تحويل الصورة إلى مجسّم ثلاثي الأبعاد</string>
+    <string name="trellis_description">حوّل الصورة إلى مجسّم ثلاثي الأبعاد بخامات وملمس (GLB).</string>
+    <string name="trellis_choose_image">اختيار الصورة</string>
+    <string name="trellis_image_selected">اختيار صورة أخرى</string>
+    <string name="trellis_generate">إنشاء المجسّم ثلاثي الأبعاد</string>
+    <string name="trellis_save">حفظ المجسّم (.glb)</string>
+    <string name="trellis_cloud_required">خادم الذكاء الاصطناعي السحابي غير مُعدّ. اضبط رابط الخادم لتفعيل TRELLIS.</string>
+    <string name="trellis_consent_title">تشغيل Trellis عبر السحابة؟</string>
+    <string name="trellis_consent_message">سيتم رفع الصورة المحددة إلى خادم الذكاء الاصطناعي المُعدّ ومعالجتها بواسطة TRELLIS المستضاف. قد تُطبّق رسوم أو حدود استخدام المزود. هل تريد المتابعة؟</string>
+    <string name="trellis_continue">متابعة ورفع الصورة</string>
+    <string name="trellis_cancel">إلغاء</string>
+    <string name="trellis_generating">جارٍ إنشاء المجسّم ثلاثي الأبعاد…</string>
+    <string name="trellis_done">تم إنشاء المجسّم. احفظه على جهازك.</string>
+    <string name="trellis_need_image">اختر صورة لجسم واحد واضح قبل بدء الإنشاء.</string>
+    <string name="trellis_save_success">تم حفظ المجسّم ثلاثي الأبعاد.</string>
+    <string name="trellis_save_failed">تعذّر حفظ المجسّم ثلاثي الأبعاد.</string>
 </resources>

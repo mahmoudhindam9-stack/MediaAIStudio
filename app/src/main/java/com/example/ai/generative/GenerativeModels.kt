@@ -16,6 +16,7 @@ enum class GenerativeType {
     OBJECT_REPLACEMENT,
     IMAGE_TO_IMAGE,
     IMAGE_TO_VIDEO,
+    TRELLIS_IMAGE_TO_3D,
     VIDEO_TO_VIDEO,
     VIDEO_EXTENSION
 }

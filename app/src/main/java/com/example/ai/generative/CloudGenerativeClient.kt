@@ -263,11 +263,25 @@ class CloudGenerativeClient(
             response.use {
                 if (!it.isSuccessful) return@withContext null
                 val body = it.body ?: return@withContext null
-                val extension = when (body.contentType()?.subtype) {
+                val remoteExtension = uri.lastPathSegment
+                    ?.substringAfterLast('.', "")
+                    ?.lowercase()
+                val extension = when (remoteExtension) {
+                    "glb" -> ".glb"
+                    "gltf" -> ".gltf"
+                    "obj" -> ".obj"
+                    "ply" -> ".ply"
                     "mp4" -> ".mp4"
                     "webp" -> ".webp"
-                    "jpeg", "jpg" -> ".jpg"
-                    else -> ".png"
+                    "jpg", "jpeg" -> ".jpg"
+                    else -> when (body.contentType()?.subtype?.lowercase()) {
+                        "mp4" -> ".mp4"
+                        "webp" -> ".webp"
+                        "jpeg", "jpg" -> ".jpg"
+                        "gltf-binary" -> ".glb"
+                        "gltf+json" -> ".gltf"
+                        else -> ".png"
+                    }
                 }
                 val file = File.createTempFile("${prefix}_", extension, appContext.cacheDir)
                 try {
@@ -388,14 +402,25 @@ class CloudGenerativeClient(
             .addHeader("Accept", "application/json")
             .addHeader("User-Agent", "MediaAIStudio/${BuildConfig.VERSION_NAME}")
             .apply {
-                if (apiKey.isNotBlank()) addHeader("Authorization", "Bearer $apiKey")
+                if (apiKey.isNotBlank() && isBackendUrl(url)) {
+                    addHeader("Authorization", "Bearer $apiKey")
+                }
             }
+
+    private fun isBackendUrl(url: String): Boolean {
+        val backendHost = Uri.parse(baseUrl).host
+        val requestHost = Uri.parse(url).host
+        return !backendHost.isNullOrBlank() &&
+            requestHost?.equals(backendHost, ignoreCase = true) == true
+    }
 
     private fun execute(request: Request): JSONObject {
         client.newCall(request.newBuilder().apply {
             if (request.header("Accept") == null) addHeader("Accept", "application/json")
             if (request.header("User-Agent") == null) addHeader("User-Agent", "MediaAIStudio/${BuildConfig.VERSION_NAME}")
-            if (apiKey.isNotBlank()) addHeader("Authorization", "Bearer $apiKey")
+            if (apiKey.isNotBlank() && isBackendUrl(request.url.toString())) {
+                addHeader("Authorization", "Bearer $apiKey")
+            }
         }.build()).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {

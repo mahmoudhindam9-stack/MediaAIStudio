@@ -124,4 +124,20 @@
     <string name="update_available_title">Update Available</string>
     <string name="update_available_desc">Version %1$s is available to download.</string>
     <string name="back">Back</string>
+    <string name="trellis_title">Trellis — Image to 3D</string>
+    <string name="trellis_description">Turn a photo into a textured 3D model (GLB).</string>
+    <string name="trellis_choose_image">Choose source image</string>
+    <string name="trellis_image_selected">Choose a different image</string>
+    <string name="trellis_generate">Generate 3D model</string>
+    <string name="trellis_save">Save 3D model (.glb)</string>
+    <string name="trellis_cloud_required">Cloud backend is not configured. Set the backend URL to enable TRELLIS.</string>
+    <string name="trellis_consent_title">Use Trellis cloud processing?</string>
+    <string name="trellis_consent_message">Your selected image will be uploaded to the configured AI backend and processed by the hosted TRELLIS provider. Provider usage fees or quotas may apply. Continue?</string>
+    <string name="trellis_continue">Continue and upload</string>
+    <string name="trellis_cancel">Cancel</string>
+    <string name="trellis_generating">Generating your 3D model…</string>
+    <string name="trellis_done">3D model generated. Save it to your device.</string>
+    <string name="trellis_need_image">Choose a photo of one object with a clear view before generating.</string>
+    <string name="trellis_save_success">3D model saved.</string>
+    <string name="trellis_save_failed">Could not save the 3D model.</string>
 </resources>

@@ -1,5 +1,9 @@
 package com.example.ai.ui
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,11 +19,18 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ai.core.AIProviderType
 import com.example.ai.model.*
+import com.example.ai.generative.GenerativeEngine
+import com.example.ai.generative.GenerativeRequest
+import com.example.ai.generative.GenerativeResult
+import com.example.ai.generative.GenerativeType
+import com.example.ai.generative.JobState
 import com.example.ai.provider.AIProviderManager
 import com.example.ui.components.AppTopBar
 import com.example.ui.components.GlassSurface
 import com.example.ui.components.SectionHeader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val LOCAL_AI_MODEL_IDS = listOf(
     "llama/inpainting_lama_2025jan",
@@ -41,6 +52,44 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val providerManager = remember { AIProviderManager(context) }
     val modelManager = remember { AppModelManager(context) }
     val modelStates by modelManager.artifacts.states.collectAsState()
+    val trellisEngine = remember { GenerativeEngine(context.applicationContext) }
+    val trellisJobs by trellisEngine.jobs.collectAsState()
+    var trellisImageUri by remember { mutableStateOf<Uri?>(null) }
+    var activeTrellisJobId by remember { mutableStateOf<String?>(null) }
+    var showTrellisConsent by remember { mutableStateOf(false) }
+    val activeTrellisJob = activeTrellisJobId?.let { trellisJobs[it] }
+    val trellisOutputUri = (activeTrellisJob?.result as? GenerativeResult.Success)?.outputUri
+    val trellisBusy = activeTrellisJob?.state?.let {
+        it in setOf(JobState.QUEUED, JobState.PREPARING, JobState.UPLOADING, JobState.PROCESSING, JobState.DOWNLOADING)
+    } == true
+
+    val pickTrellisImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> trellisImageUri = uri }
+
+    val saveTrellisModel = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("model/gltf-binary")
+    ) { destination ->
+        val source = trellisOutputUri
+        if (destination != null && source != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                val saved = runCatching {
+                    val input = context.contentResolver.openInputStream(source)
+                        ?: error("Cannot read generated 3D model")
+                    val output = context.contentResolver.openOutputStream(destination)
+                        ?: error("Cannot open destination file")
+                    input.use { sourceStream -> output.use { targetStream -> sourceStream.copyTo(targetStream) } }
+                }.isSuccess
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        context.getString(if (saved) R.string.trellis_save_success else R.string.trellis_save_failed),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
 
     val isLocalAvailable = remember { providerManager.getProvider(AIProviderType.ON_DEVICE).isAvailable }
     val isCloudAvailable = remember { providerManager.getProvider(AIProviderType.CLOUD).isAvailable }
@@ -90,6 +139,21 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         ProviderBadge(name = "Cloud", isAvailable = isCloudAvailable)
                     }
                 }
+            }
+
+            item {
+                TrellisToolCard(
+                    imageSelected = trellisImageUri != null,
+                    cloudAvailable = isCloudAvailable,
+                    busy = trellisBusy,
+                    progress = activeTrellisJob?.progress ?: 0f,
+                    status = activeTrellisJob?.message.orEmpty(),
+                    failed = activeTrellisJob?.state == JobState.FAILED,
+                    canSave = trellisOutputUri != null,
+                    onPickImage = { pickTrellisImage.launch("image/*") },
+                    onGenerate = { showTrellisConsent = true },
+                    onSave = { saveTrellisModel.launch("trellis-model.glb") }
+                )
             }
 
             item {
@@ -337,6 +401,140 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    if (showTrellisConsent) {
+        AlertDialog(
+            onDismissRequest = { showTrellisConsent = false },
+            title = { Text(stringResource(R.string.trellis_consent_title)) },
+            text = { Text(stringResource(R.string.trellis_consent_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showTrellisConsent = false
+                        val source = trellisImageUri
+                        if (source != null) {
+                            activeTrellisJobId = trellisEngine.submitJob(
+                                GenerativeRequest(
+                                    type = GenerativeType.TRELLIS_IMAGE_TO_3D,
+                                    sourceUri = source,
+                                    prompt = "Generate a textured 3D mesh from this image.",
+                                    parameters = mapOf(
+                                        "texture_size" to 1024,
+                                        "mesh_simplify" to 0.95,
+                                        "ss_sampling_steps" to 12,
+                                        "slat_sampling_steps" to 12
+                                    )
+                                )
+                            )
+                        }
+                    }
+                ) { Text(stringResource(R.string.trellis_continue)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTrellisConsent = false }) {
+                    Text(stringResource(R.string.trellis_cancel))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TrellisToolCard(
+    imageSelected: Boolean,
+    cloudAvailable: Boolean,
+    busy: Boolean,
+    progress: Float,
+    status: String,
+    failed: Boolean,
+    canSave: Boolean,
+    onPickImage: () -> Unit,
+    onGenerate: () -> Unit,
+    onSave: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.ViewInAr,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(28.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.trellis_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        stringResource(R.string.trellis_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            OutlinedButton(onClick = onPickImage, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(if (imageSelected) R.string.trellis_image_selected else R.string.trellis_choose_image))
+            }
+            if (!cloudAvailable) {
+                Text(
+                    stringResource(R.string.trellis_cloud_required),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Button(
+                onClick = onGenerate,
+                enabled = imageSelected && cloudAvailable && !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.trellis_generate))
+            }
+            if (busy) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(status.ifBlank { stringResource(R.string.trellis_generating) }, style = MaterialTheme.typography.bodySmall)
+            } else if (canSave) {
+                Text(stringResource(R.string.trellis_done), color = MaterialTheme.colorScheme.tertiary)
+                OutlinedButton(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(stringResource(R.string.trellis_save))
+                }
+            } else if (failed) {
+                Text(
+                    status.ifBlank { stringResource(R.string.ai_error_generic) },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (!imageSelected) {
+                Text(
+                    stringResource(R.string.trellis_need_image),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (status.isNotBlank()) {
+                Text(status, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
