@@ -47,13 +47,17 @@ function requestData(req) {
     for (const [key, value] of Object.entries(req.body || {})) {
         if (key.startsWith('param_')) parameters[key] = value;
     }
+    const mediaFile = req.file || (req.files && req.files.media && req.files.media[0]) || null;
+    const maskFile = (req.files && req.files.mask && req.files.mask[0]) || null;
     return {
         prompt: String(req.body.prompt || ''),
         type: String(req.body.type || 'IMAGE_GEN'),
         operation: String(req.body.operation || ''),
-        filename: req.file ? req.file.filename : null,
-        mimeType: req.file ? req.file.mimetype : null,
-        originalName: req.file ? path.basename(req.file.originalname || 'media') : null,
+        filename: mediaFile ? mediaFile.filename : null,
+        mimeType: mediaFile ? mediaFile.mimetype : null,
+        originalName: mediaFile ? path.basename(mediaFile.originalname || 'media') : null,
+        maskFilename: maskFile ? maskFile.filename : null,
+        maskMimeType: maskFile ? maskFile.mimetype : null,
         language: String(req.body.language || 'auto'),
         parameters,
         maskData: req.body.maskData || ''
@@ -66,7 +70,7 @@ router.post('/image/process', requireAuth, upload.single('media'), (req, res) =>
     res.status(202).json({ jobId: job.id, status: job.state });
 });
 
-router.post('/image/generate', requireAuth, upload.single('media'), (req, res) => {
+router.post('/image/generate', requireAuth, upload.fields([{ name: 'media', maxCount: 1 }, { name: 'mask', maxCount: 1 }]), (req, res) => {
     const job = JobManager.createJob(String(req.body.type || 'IMAGE_GEN'), requestData(req));
     void GenerativeService.processImageJob(job.id);
     res.status(202).json({ jobId: job.id, status: job.state });

@@ -119,13 +119,29 @@ async function processWithGemini(jobId, job) {
 
     const operation = String(job.request.operation || job.request.type || '').toUpperCase();
     const maskData = String(job.request.maskData || '').trim();
-    if (maskData && (operation.includes('OBJECTREMOVAL') || operation.includes('OBJECT_REMOVAL') ||
-        operation === 'FILL' || operation.includes('GENERATIVE_FILL'))) {
+    const maskFilename = String(job.request.maskFilename || '').trim();
+    const usesMask = operation.includes('OBJECTREMOVAL') || operation.includes('OBJECT_REMOVAL') ||
+        operation === 'FILL' || operation.includes('GENERATIVE_FILL');
+    if (usesMask && (maskData || maskFilename)) {
         input.push({
             type: 'text',
             text: 'The next image is a selection mask from the user. Use it only as a guide to identify the exact region to remove or edit in the source image. Preserve all unmarked areas; do not reproduce the mask as part of the result.'
         });
-        input.push(decodeMaskImage(maskData));
+        if (maskFilename) {
+            const maskSource = await readSource({
+                ...job,
+                request: { ...job.request, filename: maskFilename, mimeType: job.request.maskMimeType || 'image/png' }
+            });
+            if (!maskSource.mimeType.startsWith('image/')) {
+                throw Object.assign(new Error('The selection mask must be an image.'), { code: 'INVALID_MASK_DATA' });
+            }
+            if (maskSource.buffer.length > 10 * 1024 * 1024) {
+                throw Object.assign(new Error('The selection mask exceeds the 10 MB limit.'), { code: 'INVALID_MASK_DATA' });
+            }
+            input.push({ type: 'image', mime_type: maskSource.mimeType, data: maskSource.buffer.toString('base64') });
+        } else {
+            input.push(decodeMaskImage(maskData));
+        }
     }
 
     JobManager.updateJob(jobId, 'PROCESSING', 0.35, 'Processing with Gemini…');
@@ -335,8 +351,8 @@ async function processImageJob(jobId) {
     } catch (error) {
         updateFailure(jobId, error.code || 'AI_PROCESSING_FAILED', error.message || 'AI image processing failed.');
     } finally {
-        if (job.request.filename) {
-            await fs.promises.unlink(getFilePath(path.basename(job.request.filename))).catch(() => {});
+        for (const filename of [job.request.filename, job.request.maskFilename]) {
+            if (filename) await fs.promises.unlink(getFilePath(path.basename(filename))).catch(() => {});
         }
     }
 }
