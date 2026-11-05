@@ -44,11 +44,13 @@ if (!token) {
 
 const logDir = path.join(root, 'logs');
 fs.mkdirSync(logDir, { recursive: true });
-const backendLog = fs.createWriteStream(path.join(logDir, 'backend.log'), { flags: 'a' });
+const backendLog = path.join(logDir, 'backend.log');
+const backendOut = fs.createWriteStream(backendLog, { flags: 'a' });
+const backendErr = fs.createWriteStream(backendLog, { flags: 'a' });
 const backend = spawn(process.execPath, ['src/index.js'], {
   cwd: backendDir,
   env: { ...process.env, PORT: String(BACKEND_PORT) },
-  stdio: ['ignore', backendLog, backendLog],
+  stdio: ['ignore', backendOut, backendErr],
   windowsHide: true
 });
 
@@ -57,7 +59,7 @@ function stopBackend() {
   if (stopping) return;
   stopping = true;
   try { backend.kill(); } catch {}
-  try { backendLog.end(); } catch {}
+  try { backendOut.end(); backendErr.end(); } catch {}
 }
 process.on('exit', stopBackend);
 process.on('SIGINT', () => { stopBackend(); process.exit(0); });
