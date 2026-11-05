@@ -3,6 +3,7 @@ package com.example.camera.remote
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -154,7 +155,7 @@ fun RemoteCameraScreen() {
                             if (isSupportedStreamAddress(candidate)) {
                                 activeAddress = candidate
                                 error = null
-                            } else error = "أدخل عنوانًا يبدأ بـ rtsp:// أو rtsps://"
+                            } else error = "أدخل عنوانًا يبدأ بـ rtsp://"
                         },
                         modifier = Modifier.weight(1f)
                     ) { Text("اتصال بالكاميرا") }
