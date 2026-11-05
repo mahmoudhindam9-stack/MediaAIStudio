@@ -1,37 +1,33 @@
 # Release Process
 
-This document describes how to create and distribute a new release of MediaAIStudio via GitHub Releases.
+This document describes how to create and distribute a production-signed MediaAIStudio APK via GitHub Releases.
 
-## 1. CI/CD Preparation (GitHub Actions)
+## 1. Required GitHub Actions secrets
 
-The repository is structured to support a future GitHub Actions workflow to automate the build, signing, and release process. The CI will:
-- Check out the repository.
-- Build the `assembleRelease` APK.
-- Sign the APK using production credentials supplied securely via GitHub Secrets.
-- Generate a SHA-256 digest of the APK.
-- Create a GitHub Release and attach the APK and `.sha256` file.
+Before pushing to `main` or running the release workflow, configure these repository secrets under **Settings > Secrets and variables > Actions**:
 
-## 2. Production Signing Config
+- `RELEASE_KEYSTORE_BASE64`: the original production keystore encoded as one base64 string.
+- `RELEASE_STORE_PASSWORD`: keystore password.
+- `RELEASE_KEY_ALIAS`: the original production key alias.
+- `RELEASE_KEY_PASSWORD`: password for that key.
+- `RELEASE_CERT_SHA256`: SHA-256 fingerprint of the certificate in that same keystore (64 hexadecimal characters; colons are optional).
 
-The app is configured to use environment variables for production signing during the `release` build:
-- `RELEASE_KEYSTORE_PATH`
-- `RELEASE_STORE_PASSWORD`
-- `RELEASE_KEY_ALIAS`
-- `RELEASE_KEY_PASSWORD`
+The workflow validates that all five secrets exist and that the certificate fingerprint is correctly formatted before attempting the release build. It also checks that the keystore can be opened and contains the configured alias. The fingerprint secret is passed into the Android build as `PERMANENT_RELEASE_CERT_SHA256`, so the app's in-app update verifier trusts the exact certificate used to sign the APK.
 
-If these are not provided in the CI or local environment, the release build will fall back securely without exposing keys or committing a `debug.keystore`.
+Do not commit a keystore, passwords, API tokens, or base64-encoded signing material to the repository. Do not paste them into chat. If the original production keystore is lost, an APK cannot be used to recover its private signing key; do not generate a replacement without first planning an app-signing migration.
 
-## 3. How to Create a Release
+## 2. Release verification
 
-1. **Update Versions:** Increment `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. **Commit & Push:** Push changes to the `main` branch.
-3. **Tag the Release:** Create a tag on GitHub in the format `v{versionName}-{versionCode}` (e.g., `v1.0.1-2`).
-4. **Build APK:** Build the signed release APK (`app-release.apk`).
-5. **Publish on GitHub:** Create a new Release associated with the tag. Upload the `app-release.apk` as a binary asset.
+The workflow:
+- Validates backend JavaScript syntax.
+- Checks required signing secrets and keystore alias.
+- Builds the release APK.
+- Verifies package name, version, and APK signing certificate fingerprint.
+- Generates a SHA-256 checksum.
+- Publishes the APK and checksum as GitHub Release assets.
 
-## 4. How Users Receive Updates
+A release is not considered successful until the APK signature matches `RELEASE_CERT_SHA256`.
 
-The application includes an in-app Update Checker:
-- **Automatic Checks:** If enabled in Settings, a background `WorkManager` job periodically queries the GitHub Releases API.
-- **Manual Checks:** Users can manually trigger a check from Settings > Updates.
-- **Verification:** The app securely validates the update's `versionCode` (to prevent downgrades), optionally checks the SHA-256 digest, and **mandates** a cryptographic verification of the APK's signing certificate against the currently installed trusted identity before allowing the Android PackageInstaller to execute.
+## 3. How users receive updates
+
+The app includes an in-app Update Checker. It validates version information and the APK signing certificate against the trusted permanent release identity before allowing Android PackageInstaller to install an update. Keep the original production keystore and certificate fingerprint stable for future releases.

@@ -14,6 +14,7 @@ jobs:
     env:
       MEDIA_AI_BACKEND_URL: ${{ secrets.MEDIA_AI_BACKEND_URL }}
       MEDIA_AI_BACKEND_API_KEY: ${{ secrets.MEDIA_AI_BACKEND_API_KEY }}
+      PERMANENT_RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,14 +40,43 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Validate production signing secrets
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PATH_SECRET: ${{ secrets.RELEASE_KEYSTORE_PATH }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          missing=()
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ] && [ -z "$RELEASE_KEYSTORE_PATH_SECRET" ]; then missing+=(RELEASE_KEYSTORE_BASE64); fi
+          [ -n "$RELEASE_STORE_PASSWORD" ] || missing+=(RELEASE_STORE_PASSWORD)
+          [ -n "$RELEASE_KEY_ALIAS" ] || missing+=(RELEASE_KEY_ALIAS)
+          [ -n "$RELEASE_KEY_PASSWORD" ] || missing+=(RELEASE_KEY_PASSWORD)
+          [ -n "$RELEASE_CERT_SHA256" ] || missing+=(RELEASE_CERT_SHA256)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required signing secrets: ${missing[*]}"
+            echo "Configure them in GitHub Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          normalized=$(echo "$RELEASE_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':')
+          if ! [[ "$normalized" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::RELEASE_CERT_SHA256 must be a 64-character SHA-256 fingerprint."
+            exit 1
+          fi
       - name: Set up Production Keystore
         id: setup_keystore
         shell: bash
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_KEYSTORE_PATH_SECRET: ${{ secrets.RELEASE_KEYSTORE_PATH }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
             echo "Decoding RELEASE_KEYSTORE_BASE64 from GitHub Secrets..."
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
@@ -58,6 +88,8 @@ jobs:
             echo "::error::Permanent release signing keystore is not provided! Configure RELEASE_KEYSTORE_BASE64 in GitHub Secrets."
             exit 1
           fi
+
+          keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" >/dev/null
 
       - name: Build release APK
         id: release_build
