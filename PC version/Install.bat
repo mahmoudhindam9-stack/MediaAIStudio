@@ -10,7 +10,7 @@ echo.
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [1/5] Node.js LTS is required. Installing it now...
+  echo [1/6] Node.js LTS is required. Installing it now...
   where winget >nul 2>nul
   if errorlevel 1 (
     echo.
@@ -41,19 +41,23 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/5] Installing backend dependencies...
+echo [2/6] Installing backend dependencies...
 call npm install --prefix "backend"
 if errorlevel 1 goto :failed
 
 echo.
-echo [3/5] Installing web dependencies...
+echo [3/6] Installing web dependencies...
 call npm install --prefix "web"
 if errorlevel 1 goto :failed
 
 echo.
-echo [4/5] Building the browser application...
+echo [4/6] Building the browser application, including Camera studio...
 call npm run build --prefix "web"
 if errorlevel 1 goto :failed
+if not exist "web\dist\index.html" (
+  echo The web application build did not create web\dist\index.html.
+  goto :failed
+)
 
 echo.
 echo [5/6] Checking optional FFmpeg support for IP cameras...
@@ -66,10 +70,10 @@ if errorlevel 1 (
   ) else (
     choice /c YN /n /m "Install FFmpeg now using winget? [Y/N]: "
     if errorlevel 2 (
-      echo Skipping FFmpeg. USB cameras will still work; RTSP can be enabled later.
+      echo Skipping FFmpeg. USB cameras still work; RTSP can be enabled later.
     ) else (
       winget install --id Gyan.FFmpeg.Shared --exact --silent --accept-package-agreements --accept-source-agreements
-      if errorlevel 1 echo FFmpeg installation did not complete. USB cameras will still work; RTSP support can be installed later.
+      if errorlevel 1 echo FFmpeg installation did not complete. USB cameras still work; RTSP support can be installed later.
     )
   )
 ) else (
@@ -91,16 +95,29 @@ if not exist "backend\.env" (
   >>"backend\.env" echo TRANSCRIPTION_MODEL=gemini-3.8-flash
 )
 
-cscript //nologo "CreateShortcut.vbs"
+echo.
+echo Creating Desktop and Start Menu shortcuts...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0CreateShortcut.ps1" -InstallDirectory "%~dp0"
 if errorlevel 1 (
-  echo Could not create the desktop shortcut automatically.
-  echo You can still open Start.bat from this folder.
+  echo WARNING: Automatic Desktop shortcut creation failed.
+  echo You can still launch the application with Start.bat in this folder.
+  echo You can retry shortcut creation by right-clicking CreateShortcut.ps1 and choosing Run with PowerShell.
+  goto :shortcut_warning
 )
 
 echo.
 echo Setup completed successfully.
-echo A MediaAIStudio shortcut has been added to your Desktop.
-echo Double-click it to open the app in your browser.
+echo A MediaAIStudio shortcut has been added to your Desktop and Start Menu.
+echo Camera studio is available from the left navigation inside the app.
+echo Double-click the Desktop shortcut to open the app in your browser.
+echo.
+pause
+exit /b 0
+
+:shortcut_warning
+echo.
+echo Application setup completed, but the Desktop shortcut needs attention.
+echo A Start Menu shortcut may still be available.
 echo.
 pause
 exit /b 0
