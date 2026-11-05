@@ -1,4 +1,4 @@
-# MediaAIStudio PC 1.8.0
+# MediaAIStudio PC 1.8.1
 
 This edition runs as a local web application in the default browser. It does not install an Android emulator or modify the Android edition.
 
