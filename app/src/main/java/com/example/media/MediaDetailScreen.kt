@@ -1,9 +1,11 @@
 package com.example.media
 
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -19,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -29,8 +30,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MediaDetailScreen(
     uriString: String,
@@ -40,38 +42,44 @@ fun MediaDetailScreen(
 ) {
     val context = LocalContext.current
     val mediaRepository = remember { MediaStoreRepository(context) }
+    val coroutineScope = rememberCoroutineScope()
     var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var currentUriString by remember(uriString) { mutableStateOf(uriString) }
 
     LaunchedEffect(Unit) {
         mediaRepository.getAllMedia().collect { mediaItems = it }
     }
 
-    val currentUri = Uri.parse(currentUriString)
-    val currentMimeType = context.contentResolver.getType(currentUri) ?: "image/jpeg"
-    val currentIsVideo = currentMimeType.startsWith("video/")
-    val navigableItems = remember(mediaItems, currentIsVideo) {
-        mediaItems.filter { it.isVideo == currentIsVideo }
+    val requestedUri = Uri.parse(uriString)
+    val requestedMimeType = context.contentResolver.getType(requestedUri) ?: "image/jpeg"
+    val requestedIsVideo = requestedMimeType.startsWith("video/")
+    val navigableItems = remember(mediaItems, requestedIsVideo) {
+        mediaItems.filter { it.isVideo == requestedIsVideo }
     }
-    val currentIndex = navigableItems.indexOfFirst { it.uri.toString() == currentUriString }
-
-    fun move(delta: Int) {
-        if (navigableItems.isEmpty()) return
-        val index = if (currentIndex >= 0) currentIndex else 0
-        val target = (index + delta).coerceIn(0, navigableItems.lastIndex)
-        currentUriString = navigableItems[target].uri.toString()
+    val initialIndex = navigableItems.indexOfFirst { it.uri.toString() == uriString }.coerceAtLeast(0)
+    val pagerState = rememberPagerState(initialPage = initialIndex) {
+        navigableItems.size.coerceAtLeast(1)
     }
 
-    val canGoPrevious = currentIndex > 0
-    val canGoNext = if (currentIndex >= 0) currentIndex < navigableItems.lastIndex else navigableItems.isNotEmpty()
+    LaunchedEffect(uriString, navigableItems) {
+        val matchingIndex = navigableItems.indexOfFirst { it.uri.toString() == uriString }
+        if (matchingIndex >= 0 && pagerState.currentPage != matchingIndex) {
+            pagerState.scrollToPage(matchingIndex)
+        }
+    }
+
+    val currentMedia = navigableItems.getOrNull(pagerState.currentPage)
+    val currentUriString = currentMedia?.uri?.toString() ?: uriString
+    val currentIsVideo = currentMedia?.isVideo ?: requestedIsVideo
+    val canGoPrevious = pagerState.currentPage > 0
+    val canGoNext = pagerState.currentPage < navigableItems.lastIndex
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
                     if (navigableItems.isNotEmpty()) {
-                        val position = if (currentIndex >= 0) currentIndex + 1 else 1
-                        Text("$position / ${navigableItems.size}")
+                        Text("${pagerState.currentPage + 1} / ${navigableItems.size}")
                     }
                 },
                 navigationIcon = {
@@ -86,10 +94,10 @@ fun MediaDetailScreen(
                     actionIconContentColor = Color.White
                 ),
                 actions = {
-                    IconButton(onClick = { /* Future: Favorite */ }) {
+                    IconButton(onClick = { /* Favorite action can be connected to the media repository. */ }) {
                         Icon(Icons.Default.Favorite, contentDescription = "Favorite")
                     }
-                    IconButton(onClick = { /* Future: Share */ }) {
+                    IconButton(onClick = { /* Share action can be connected to the Android share sheet. */ }) {
                         Icon(Icons.Default.Share, contentDescription = "Share")
                     }
                     IconButton(onClick = {
@@ -97,7 +105,7 @@ fun MediaDetailScreen(
                     }) {
                         Icon(Icons.Default.Edit, contentDescription = "Edit")
                     }
-                    IconButton(onClick = { /* Future: Delete */ }) {
+                    IconButton(onClick = { /* Delete action can be connected to the media repository. */ }) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete")
                     }
                 }
@@ -108,42 +116,40 @@ fun MediaDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .pointerInput(navigableItems, currentUriString) {
-                    var totalDrag = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { totalDrag = 0f },
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            totalDrag += dragAmount
-                        },
-                        onDragEnd = {
-                            when {
-                                totalDrag < -80f && canGoNext -> move(+1)
-                                totalDrag > 80f && canGoPrevious -> move(-1)
-                            }
-                        }
-                    )
-                },
+                .padding(paddingValues),
             contentAlignment = Alignment.Center
         ) {
-            if (currentIsVideo) {
-                VideoPlayer(uri = currentUri)
+            if (navigableItems.isEmpty()) {
+                Text("Media is no longer available", color = Color.White)
             } else {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(currentUri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "Photo",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 0,
+                    key = { page -> navigableItems[page].uri.toString() }
+                ) { page ->
+                    val item = navigableItems[page]
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (item.isVideo) {
+                            VideoPlayer(uri = item.uri)
+                        } else {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(item.uri)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Photo",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
             }
 
             if (canGoPrevious) {
                 IconButton(
-                    onClick = { move(-1) },
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) } },
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = 10.dp)
@@ -155,7 +161,7 @@ fun MediaDetailScreen(
             }
             if (canGoNext) {
                 IconButton(
-                    onClick = { move(+1) },
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } },
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 10.dp)
