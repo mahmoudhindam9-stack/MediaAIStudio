@@ -181,10 +181,14 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         text = when {
                             backendHealth == null && checkingBackend -> "Checking AI backend connection…"
                             backendHealth == null -> "Cloud backend is unreachable or its URL is not configured."
-                            !backendHealth.backendAuthConfigured -> "Backend access token is not configured."
-                            !backendHealth.publicBaseUrlConfigured -> "Backend public HTTPS URL is not configured."
-                            else -> "Gemini: " + (if (backendHealth.geminiConfigured) "configured" else "missing key") +
-                                " • TRELLIS: " + (if (backendHealth.trellisConfigured) "configured" else "missing key")
+                            else -> backendHealth?.let { health ->
+                                when {
+                                    !health.backendAuthConfigured -> "Backend access token is not configured."
+                                    !health.publicBaseUrlConfigured -> "Backend public HTTPS URL is not configured."
+                                    else -> "Gemini: " + (if (health.geminiConfigured) "configured" else "missing key") +
+                                        " • TRELLIS: " + (if (health.trellisConfigured) "configured" else "missing key")
+                                }
+                            }.orEmpty()
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isCloudAvailable) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
