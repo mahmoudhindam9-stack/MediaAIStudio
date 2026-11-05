@@ -78,6 +78,12 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
         it in setOf(JobState.QUEUED, JobState.PREPARING, JobState.UPLOADING, JobState.PROCESSING, JobState.DOWNLOADING)
     } == true
 
+    LaunchedEffect(modelManager) {
+        withContext(Dispatchers.IO) {
+            modelManager.artifacts.refreshInstalledStates()
+        }
+    }
+
     val pickTrellisImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> trellisImageUri = uri }
