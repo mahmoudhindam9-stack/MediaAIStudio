@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
+const crypto = require('crypto');
 
 const root = __dirname;
 const backendDir = path.join(root, 'backend');
@@ -9,6 +10,8 @@ const distDir = path.join(root, 'web', 'dist');
 const backendEnvPath = path.join(backendDir, '.env');
 const PORT = 4173;
 const BACKEND_PORT = 3100;
+const CAMERA_AGENT_PORT = 3101;
+const CAMERA_AGENT_TOKEN = crypto.randomBytes(32).toString('hex');
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -47,6 +50,12 @@ fs.mkdirSync(logDir, { recursive: true });
 const backendLog = path.join(logDir, 'backend.log');
 const backendOut = fs.createWriteStream(backendLog, { flags: 'a' });
 const backendErr = fs.createWriteStream(backendLog, { flags: 'a' });
+const cameraAgent = spawn(process.execPath, ['camera-agent.js'], {
+  cwd: root,
+  env: { ...process.env, CAMERA_AGENT_PORT: String(CAMERA_AGENT_PORT), CAMERA_AGENT_TOKEN },
+  stdio: ['ignore', backendOut, backendErr],
+  windowsHide: true
+});
 const backend = spawn(process.execPath, ['src/index.js'], {
   cwd: backendDir,
   env: { ...process.env, PORT: String(BACKEND_PORT) },
@@ -59,6 +68,7 @@ function stopBackend() {
   if (stopping) return;
   stopping = true;
   try { backend.kill(); } catch {}
+  try { cameraAgent.kill(); } catch {}
   try { backendOut.end(); backendErr.end(); } catch {}
 }
 process.on('exit', stopBackend);
@@ -70,6 +80,22 @@ backend.on('error', (error) => {
 
 const server = http.createServer((req, res) => {
   const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  const cameraPrefix = '/api/camera';
+  if (requestUrl.pathname === cameraPrefix || requestUrl.pathname.startsWith(cameraPrefix + '/')) {
+    const targetPath = requestUrl.pathname.slice(cameraPrefix.length) || '/';
+    const headers = { ...req.headers, host: '127.0.0.1:' + CAMERA_AGENT_PORT, authorization: 'Bearer ' + CAMERA_AGENT_TOKEN };
+    delete headers.connection;
+    const upstream = http.request({ hostname: '127.0.0.1', port: CAMERA_AGENT_PORT, path: targetPath + requestUrl.search, method: req.method, headers }, (upstreamRes) => {
+      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+      upstreamRes.pipe(res);
+    });
+    upstream.on('error', (error) => {
+      if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'CAMERA_AGENT_UNAVAILABLE', message: error.message }));
+    });
+    req.pipe(upstream);
+    return;
+  }
   const prefix = '/api/backend';
   if (requestUrl.pathname === prefix || requestUrl.pathname.startsWith(prefix + '/')) {
     const targetPath = requestUrl.pathname.slice(prefix.length) || '/';
