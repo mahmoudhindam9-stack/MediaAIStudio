@@ -14,6 +14,17 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  // Build ABI-specific APKs so each Android device downloads only its native libraries.
+  // Keep all four supported ABIs; no AI or camera functionality is removed.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+      isUniversalApk = false
+    }
+  }
+
   defaultConfig {
     applicationId = "com.example.mediaaistudio"
     minSdk = 24
