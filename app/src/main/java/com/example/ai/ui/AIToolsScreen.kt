@@ -114,8 +114,13 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
 
     val isLocalAvailable = remember { providerManager.getProvider(AIProviderType.ON_DEVICE).isAvailable }
     val isCloudConfigured = providerManager.getProvider(AIProviderType.CLOUD).isAvailable
-    val isCloudAvailable = isCloudConfigured && backendHealth?.reachable == true &&
-        backendHealth?.backendAuthConfigured == true && backendHealth?.readyForCloudOperations == true
+    val backendCanAcceptRequests = backendHealth?.reachable == true &&
+        backendHealth?.backendAuthConfigured == true && backendHealth?.publicBaseUrlConfigured == true
+    val isGeminiAvailable = isCloudConfigured && backendCanAcceptRequests &&
+        backendHealth?.geminiConfigured == true
+    val isTrellisAvailable = isCloudConfigured && backendCanAcceptRequests &&
+        backendHealth?.trellisConfigured == true
+    val isCloudAvailable = isGeminiAvailable
 
     val models = remember(modelStates) { modelManager.getAvailableModels() }
     val localModels = remember(models) {
@@ -200,7 +205,7 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
             item {
                 TrellisToolCard(
                     imageSelected = trellisImageUri != null,
-                    cloudAvailable = isCloudAvailable,
+                    cloudAvailable = isTrellisAvailable,
                     busy = trellisBusy,
                     progress = activeTrellisJob?.progress ?: 0f,
                     status = activeTrellisJob?.message.orEmpty(),
@@ -385,7 +390,15 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                 Triple(R.string.ai_enhance, AICapability.ENHANCEMENT, Icons.Default.AutoFixHigh),
                 Triple(R.string.ai_restyle, AICapability.RESTYLE, Icons.Default.Brush),
                 Triple(R.string.ai_gen_fill, AICapability.GENERATIVE_FILL, Icons.Default.FormatPaint),
-                Triple(R.string.ai_img_to_img, AICapability.IMAGE_TO_IMAGE, Icons.Default.Transform)
+                Triple(R.string.ai_img_to_img, AICapability.IMAGE_TO_IMAGE, Icons.Default.Transform),
+                Triple(R.string.ai_object_tracking, AICapability.VIDEO_OBJECT_TRACKING, Icons.Default.Search),
+                Triple(R.string.ai_smart_cut, AICapability.SMART_CUT, Icons.Default.AutoFixHigh),
+                Triple(R.string.ai_auto_captions, AICapability.AUTO_CAPTIONS, Icons.Default.Subtitles),
+                Triple(R.string.ai_video_enhance, AICapability.VIDEO_ENHANCEMENT, Icons.Default.AutoFixHigh),
+                Triple(R.string.ai_smart_reframe, AICapability.SMART_REFRAME, Icons.Default.Crop),
+                Triple(R.string.ai_img_to_vid, AICapability.IMAGE_TO_VIDEO, Icons.Default.Movie),
+                Triple(R.string.ai_vid_to_vid, AICapability.VIDEO_TO_VIDEO, Icons.Default.Movie),
+                Triple(R.string.ai_vid_ext, AICapability.VIDEO_EXTENSION, Icons.Default.Movie)
             )
 
             items(tools.size) { index ->
@@ -401,7 +414,11 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         AICapabilityStatus.AVAILABLE -> "Ready" to MaterialTheme.colorScheme.tertiary
                         AICapabilityStatus.UNAVAILABLE -> "Unavailable" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.REQUIRES_MODEL -> "Download Required" to MaterialTheme.colorScheme.secondary
-                        AICapabilityStatus.REQUIRES_CLOUD -> "Cloud Only" to MaterialTheme.colorScheme.primary
+                        AICapabilityStatus.REQUIRES_CLOUD -> if (isGeminiAvailable) {
+                            "Cloud Ready" to MaterialTheme.colorScheme.tertiary
+                        } else {
+                            "Cloud Setup Required" to MaterialTheme.colorScheme.error
+                        }
                         AICapabilityStatus.DEVICE_NOT_SUPPORTED -> "Not Supported" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.REQUIRES_PROVIDER -> "Setup Required" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.PROCESSING -> "Processing..." to MaterialTheme.colorScheme.primary
