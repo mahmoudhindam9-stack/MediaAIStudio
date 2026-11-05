@@ -43,3 +43,22 @@ jobs:
       - name: Build Windows workspace web app
         working-directory: PC version/web
         run: npm run build
+
+      - name: Package portable Windows setup folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pc-package"
+          cp -a "PC version" "$RUNNER_TEMP/pc-package/MediaAIStudio"
+          find "$RUNNER_TEMP/pc-package/MediaAIStudio" -type d -name node_modules -prune -exec rm -rf {} +
+          find "$RUNNER_TEMP/pc-package/MediaAIStudio" -type f -name ".env" -delete
+          rm -rf "$RUNNER_TEMP/pc-package/MediaAIStudio/logs"
+          cd "$RUNNER_TEMP/pc-package"
+          zip -qr "$RUNNER_TEMP/MediaAIStudio-PC-Setup.zip" MediaAIStudio
+      - name: Upload portable Windows setup package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaAIStudio-PC-Setup
+          path: ${{ runner.temp }}/MediaAIStudio-PC-Setup.zip
+          if-no-files-found: error
+          retention-days: 30
