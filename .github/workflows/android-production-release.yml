@@ -1,0 +1,105 @@
+name: Android Production Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "android-v1.8.0"
+
+permissions:
+  contents: write
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_KEYSTORE_PATH: ${{ github.workspace }}/Android version/release.keystore
+      RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+      RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      PERMANENT_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+    defaults:
+      run:
+        working-directory: Android version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require permanent signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_STORE_PASSWORD" || { echo "::error::Missing ANDROID_RELEASE_STORE_PASSWORD"; exit 1; }
+          test -n "$RELEASE_KEY_ALIAS" || { echo "::error::Missing ANDROID_RELEASE_KEY_ALIAS"; exit 1; }
+          test -n "$RELEASE_KEY_PASSWORD" || { echo "::error::Missing ANDROID_RELEASE_KEY_PASSWORD"; exit 1; }
+          test -n "$PERMANENT_RELEASE_CERT_SHA256" || { echo "::error::Missing ANDROID_RELEASE_CERT_SHA256"; exit 1; }
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64" || { echo "::error::Missing ANDROID_RELEASE_KEYSTORE_BASE64"; exit 1; }
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+
+      - name: Restore permanent release keystore
+        shell: bash
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > release.keystore
+          test -s release.keystore
+          ACTUAL="$(keytool -list -v -keystore release.keystore -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" 2>/dev/null | awk -F': ' '/SHA256:/{print tolower($2); exit}' | tr -d ':')"
+          EXPECTED="$(printf '%s' "$PERMANENT_RELEASE_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':')"
+          test -n "$ACTUAL" && test "$ACTUAL" = "$EXPECTED" || { echo "::error::Release keystore certificate fingerprint mismatch"; exit 1; }
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Run release unit tests
+        run: gradle :app:testReleaseUnitTest --stacktrace
+
+      - name: Run release lint
+        run: gradle lintRelease --stacktrace
+
+      - name: Build production APKs
+        run: gradle assembleRelease --stacktrace
+
+      - name: Verify every APK is signed by the permanent release certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="$(printf '%s' "$PERMANENT_RELEASE_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':')"
+          mapfile -t APKS < <(find app/build/outputs/apk/release -type f -name '*.apk' | sort)
+          test "${#APKS[@]}" -eq 4 || { echo "::error::Expected 4 ABI APKs, found ${#APKS[@]}"; exit 1; }
+          mkdir -p ../production-release
+          for apk in "${APKS[@]}"; do
+            apksigner verify --verbose --print-certs "$apk" | tee /tmp/apksigner.txt
+            ACTUAL="$(awk -F': ' '/certificate SHA-256 digest:/{print tolower($2); exit}' /tmp/apksigner.txt | tr -d ':')"
+            test "$ACTUAL" = "$EXPECTED" || { echo "::error::Unexpected signing certificate in $apk"; exit 1; }
+            cp "$apk" ../production-release/
+          done
+          cd ../production-release
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Publish production release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v1.8.0
+          target_commitish: main
+          name: MediaAIStudio Android 1.8.0
+          prerelease: false
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            production-release/*.apk
+            production-release/SHA256SUMS.txt
+          body: |
+            Production-signed Android 1.8.0 release.
+            Signed with the permanent MediaAIStudio Android release certificate and verified against its pinned SHA-256 fingerprint.
+            Four ABI-specific APKs are attached (arm64-v8a, armeabi-v7a, x86, x86_64).
+            The existing Android 1.7.0 release and the separate 1.8.0 preview release remain preserved.
