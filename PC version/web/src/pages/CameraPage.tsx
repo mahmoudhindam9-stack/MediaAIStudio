@@ -16,7 +16,7 @@ export default function CameraPage() {
   const agentBase = isLocalApp ? '/api/camera' : 'http://127.0.0.1:3101';
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const hlsRef = useRef<Hls | null>(null);\n  const phonePeerRef = useRef<RTCPeerConnection | null>(null);
   const [source, setSource] = useState<Source>('usb');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
@@ -74,7 +74,7 @@ export default function CameraPage() {
     }
   }, [agentFetch, agentToken, isLocalApp]);
 
-  const stopCamera = useCallback(async () => {
+  const stopCamera = useCallback(async () => {\n    phonePeerRef.current?.close();\n    phonePeerRef.current = null;
     streamRef.current?.getTracks().forEach(track => track.stop());
     streamRef.current = null;
     hlsRef.current?.destroy();
@@ -125,7 +125,7 @@ export default function CameraPage() {
       const session = await fetch('/api/phone-relay/session', { method: 'POST' }).then(async r => {
         const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not create a pairing session.'); return d;
       });
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });\n      phonePeerRef.current = pc;\n      pc.addTransceiver('video', { direction: 'recvonly' });
       const remote = new MediaStream();
       if (videoRef.current) videoRef.current.srcObject = remote;
       pc.ontrack = event => {
@@ -288,7 +288,7 @@ export default function CameraPage() {
           <button className={source === 'wifi' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('wifi'); setWifiQrUrl(''); }}><Smartphone/><b>Wi-Fi phone</b><small>Scan QR to send phone live camera</small></button>
         </div>
         {source === 'usb' && <div className="camera-field"><label>Browser camera</label><select value={deviceId} onChange={e => setDeviceId(e.target.value)}><option value="">Default camera</option>{devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Camera ' + (i + 1)}</option>)}</select><button className="camera-link" onClick={() => void refreshDevices()}><RefreshCw size={14}/> Refresh devices</button><small>{deviceResult?.available ? deviceResult.devices.length + ' DirectShow camera(s) detected by Windows' : 'Browser camera access is available; install FFmpeg to enable Windows-level device discovery.'}</small></div>}
-        {source === 'wifi' && <div className="camera-field"><div className="camera-tip"><Wifi size={18}/><span>Connect your phone to the same Wi-Fi network. A temporary secure link will open the camera page after scanning.</span></div><button className="primary" disabled={wifiBusy} onClick={() => void createWifiPairing()}>{wifiBusy ? 'Preparing QR code…' : 'Generate phone connection QR'}</button>{wifiQrUrl && <div className="wifi-qr-panel"><QRCodeSVG value={wifiQrUrl} size={210} bgColor="#ffffff" fgColor="#10131a" level="H"/><b>Scan with your phone</b><small>{wifiStatus}</small><button className="camera-link" onClick={() => void navigator.clipboard.writeText(wifiQrUrl)}>Copy secure phone link</button></div>}</div>}
+        {source === 'wifi' && <div className="camera-field"><div className="camera-tip"><Wifi size={18}/><span>Connect your phone to the same Wi-Fi network. A temporary secure link will open the camera page after scanning.</span></div><button className="primary" disabled={wifiBusy} onClick={() => void createWifiPairing()}>{wifiBusy ? 'Preparing QR code…' : 'Generate phone connection QR'}</button>{wifiQrUrl && <div className="wifi-qr-panel"><QRCodeSVG value={wifiQrUrl} size={210} bgColor="#ffffff" fgColor="#10131a" level="H"/><b>Scan with your phone</b><small>{wifiStatus}</small><button className="camera-link" onClick={() => void navigator.clipboard.writeText(wifiQrUrl)}>Copy secure phone link</button><button className="secondary" onClick={() => { void stopCamera(); setWifiQrUrl(''); setWifiStatus('Phone camera disconnected.'); }}>Disconnect phone</button></div>}</div>}
         {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This uses the rear camera of the device currently viewing the page. If opened on a phone over HTTPS, it can capture from that phone; live phone-to-PC video relay is a separate feature and is not enabled yet.</span></div>}
         {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are passed to the local FFmpeg process and are not intentionally written to app logs.</small><button className="camera-link" disabled={discovering} onClick={() => void discoverOnvif()}><Wifi size={14}/>{discovering ? 'Searching network…' : 'Discover ONVIF cameras'}</button>{onvifDevices.length > 0 && <div className="onvif-list">{onvifDevices.map(device => <div className="onvif-item" key={device.xaddr}><b>{device.name}</b><small>{device.xaddr}</small><button className="camera-link" onClick={async () => { try { const host = new URL(device.xaddr).hostname; await navigator.clipboard.writeText(host); setMessage('Copied camera host ' + host + '. Enter the RTSP path supplied by the camera manufacturer.'); } catch { setMessage('ONVIF endpoint: ' + device.xaddr); } }}>Copy camera host</button></div>)}</div>}{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
         <div className="camera-actions"><button className="primary" disabled={busy || source === 'wifi' || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
