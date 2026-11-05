@@ -391,6 +391,8 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                 Triple(R.string.ai_restyle, AICapability.RESTYLE, Icons.Default.Brush),
                 Triple(R.string.ai_gen_fill, AICapability.GENERATIVE_FILL, Icons.Default.FormatPaint),
                 Triple(R.string.ai_img_to_img, AICapability.IMAGE_TO_IMAGE, Icons.Default.Transform),
+                Triple(R.string.ai_gen_fill, AICapability.OBJECT_REPLACEMENT, Icons.Default.Transform),
+                Triple(R.string.ai_object_detection, AICapability.VIDEO_OBJECT_DETECTION, Icons.Default.Search),
                 Triple(R.string.ai_object_tracking, AICapability.VIDEO_OBJECT_TRACKING, Icons.Default.Search),
                 Triple(R.string.ai_smart_cut, AICapability.SMART_CUT, Icons.Default.AutoFixHigh),
                 Triple(R.string.ai_auto_captions, AICapability.AUTO_CAPTIONS, Icons.Default.Subtitles),
