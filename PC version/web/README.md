@@ -1,6 +1,6 @@
 # MediaAIStudio Web
 
-React + Vite + TypeScript browser workspace for the existing MediaAIStudio backend. Android and backend source files are unchanged.
+React + Vite + TypeScript browser workspace for the existing MediaAIStudio backend. The native Android project is stored separately in `Android version/`; this folder contains the browser-based PC interface.
 
 ## Features
 - Responsive dark dashboard and backend health status.
@@ -31,7 +31,7 @@ GET /health, GET /v1/ai/status, POST /v1/ai/image/process, POST /v1/ai/image/gen
 
 ## Deploy to Vercel
 1. Import mahmoudhindam9-stack/MediaAIStudio into Vercel.
-2. Set Root Directory to web and framework preset to Vite.
+2. Set Root Directory to `PC version/web` and framework preset to Vite.
 3. Build command npm run build; output directory dist; install command npm install.
 4. Add BACKEND_URL and MEDIA_AI_BACKEND_API_KEY in Project Settings → Environment Variables.
 5. Redeploy and test the Settings page.
