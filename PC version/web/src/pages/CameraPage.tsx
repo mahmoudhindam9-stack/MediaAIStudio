@@ -5,12 +5,14 @@ import { Aperture, Camera, CameraOff, CheckCircle2, CircleHelp, Cpu, Monitor, Pl
 import { backend, jobForm } from '../api/backend';
 
 type Source = 'usb' | 'phone' | 'ip';
-type AgentHealth = { status?: string; ffmpeg?: { available: boolean; version?: string | null }; rtsp?: { active: boolean; source?: string | null; error?: string | null } };
+type AgentHealth = { status?: string; ffmpeg?: { available: boolean; version?: string | null }; rtsp?: { active: boolean; source?: string | null; error?: string | null }; pairCode?: string | null; pairCodeExpiresAt?: number };
 type DeviceResult = { available: boolean; version?: string | null; devices: Array<{ name: string; kind: string }>; message?: string | null };
 type OnvifDevice = { name: string; xaddr: string; xaddrs: string[]; scopes: string[] };
 
 export default function CameraPage() {
   const navigate = useNavigate();
+  const isLocalApp = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+  const agentBase = isLocalApp ? '/api/camera' : 'http://127.0.0.1:3101';
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -28,18 +30,22 @@ export default function CameraPage() {
   const [snapshot, setSnapshot] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [agentToken, setAgentToken] = useState('');
+  const [pairCodeInput, setPairCodeInput] = useState('');
+  const [pairBusy, setPairBusy] = useState(false);
 
   const agentFetch = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await fetch('/api/camera' + path, {
-      ...init,
-      headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers }
-    });
+    const headers = new Headers(init.headers);
+    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    if (!isLocalApp && agentToken) headers.set('Authorization', 'Bearer ' + agentToken);
+    const response = await fetch(agentBase + path, { ...init, headers });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || data.error || 'The local camera companion is unavailable.');
     return data as T;
-  }, []);
+  }, [agentBase, agentToken, isLocalApp]);
 
   const refreshAgent = useCallback(async () => {
+    if (!isLocalApp && !agentToken) { setAgent(null); return null; }
     try {
       const health = await agentFetch<AgentHealth>('/health');
       setAgent(health);
@@ -49,18 +55,20 @@ export default function CameraPage() {
       setError(e instanceof Error ? e.message : 'Cannot reach the local camera companion.');
       return null;
     }
-  }, [agentFetch]);
+  }, [agentFetch, agentToken, isLocalApp]);
 
   const refreshDevices = useCallback(async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       setDevices(all.filter(d => d.kind === 'videoinput'));
-      const result = await agentFetch<DeviceResult>('/devices');
-      setDeviceResult(result);
+      if (isLocalApp || agentToken) {
+        const result = await agentFetch<DeviceResult>('/devices');
+        setDeviceResult(result);
+      } else setDeviceResult(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not list camera devices.');
     }
-  }, [agentFetch]);
+  }, [agentFetch, agentToken, isLocalApp]);
 
   const stopCamera = useCallback(async () => {
     streamRef.current?.getTracks().forEach(track => track.stop());
@@ -77,7 +85,22 @@ export default function CameraPage() {
     setActive(false);
   }, [agentFetch]);
 
+  async function pairWithLocalAgent() {
+    setPairBusy(true);
+    setError('');
+    try {
+      const response = await fetch(agentBase + '/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: pairCodeInput.trim() }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Could not pair with the Windows camera companion.');
+      setAgentToken(data.token);
+      setMessage('Paired with the Windows camera companion. The connection expires in four hours.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Pairing failed. Make sure MediaAIStudio is running on this PC.');
+    } finally { setPairBusy(false); }
+  }
+
   async function discoverOnvif() {
+    if (!isLocalApp && !agentToken) { setError('Pair this browser with the Windows camera companion first.'); return; }
     setDiscovering(true);
     setError('');
     try {
@@ -98,14 +121,16 @@ export default function CameraPage() {
       const video = videoRef.current;
       if (!video) return;
       if (source === 'ip') {
+        if (!isLocalApp && !agentToken) throw new Error('Pair this browser with the Windows camera companion first.');
         if (!rtspUrl.trim()) throw new Error('Enter the IP camera RTSP address first.');
         const result = await agentFetch<{ playlist: string }>('/rtsp/start', {
           method: 'POST', body: JSON.stringify({ url: rtspUrl.trim() })
         });
+        const playlist = isLocalApp ? result.playlist : agentBase + result.playlist.replace('/api/camera', '');
         if (Hls.isSupported()) {
-          const hls = new Hls({ enableWorker: true, lowLatencyMode: true, liveSyncDurationCount: 2 });
+          const hls = new Hls({ enableWorker: true, lowLatencyMode: true, liveSyncDurationCount: 2, xhrSetup: (xhr) => { if (agentToken) xhr.setRequestHeader('Authorization', 'Bearer ' + agentToken); } });
           hlsRef.current = hls;
-          hls.loadSource(result.playlist);
+          hls.loadSource(playlist);
           hls.attachMedia(video);
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal) setError('The RTSP bridge could not play this camera. Check the camera credentials, network and FFmpeg installation.');
@@ -116,7 +141,7 @@ export default function CameraPage() {
             hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) { window.clearTimeout(timer); reject(new Error('FFmpeg could not decode this RTSP stream.')); } });
           });
         } else {
-          video.src = result.playlist;
+          video.src = playlist;
           await video.play();
         }
       } else {
@@ -182,7 +207,7 @@ export default function CameraPage() {
       hlsRef.current?.destroy();
       void agentFetch('/rtsp/stop', { method: 'POST', body: '{}' });
     };
-  }, [agentFetch, refreshAgent, refreshDevices]);
+  }, [agentFetch, refreshAgent, refreshDevices, agentToken, isLocalApp, agentBase]);
 
   return <div>
     <div className="intro">
@@ -190,16 +215,18 @@ export default function CameraPage() {
       <h1>Camera studio</h1>
       <p>Connect USB webcams and network cameras to the Windows AI workspace. Camera access stays on this PC unless you choose to submit a captured frame to an AI provider.</p>
     </div>
+    {!isLocalApp && !agentToken && <section className="panel camera-pair-panel"><div className="eyebrow">SECURE LOCAL CONNECTION</div><h2>Pair with your Windows PC</h2><p>Open MediaAIStudio on the Windows PC, go to Camera studio, and copy the one-time pairing code shown there. Enter it below to let this Vercel page use that PC's local camera companion.</p><div className="camera-pair-row"><input inputMode="numeric" maxLength={8} value={pairCodeInput} onChange={e => setPairCodeInput(e.target.value.replace(/\D/g, ''))} placeholder="8-digit pairing code"/><button className="primary" disabled={pairBusy || pairCodeInput.length !== 8} onClick={() => void pairWithLocalAgent()}>{pairBusy ? 'Pairing…' : 'Pair this browser'}</button></div><small>The code is one-use, expires after 10 minutes, and the paired session expires after four hours. This requires the PC companion to be running on the same computer as this browser.</small></section>}
+    {isLocalApp && agent?.pairCode && <section className="panel camera-pair-panel"><div className="eyebrow">PAIR VERCEL WITH THIS PC</div><h2>One-time pairing code</h2><div className="camera-pair-code">{agent.pairCode}</div><p>Enter this code in Camera studio when opened from the Vercel site on this same PC. It expires in 10 minutes and can be used once.</p></section>}
     <div className="camera-layout">
       <section className="panel camera-controls">
         <div className="camera-title"><div><div className="eyebrow">INPUT SOURCE</div><h2>Choose a camera</h2></div><span className={active ? 'camera-live' : 'camera-idle'}>{active ? '● LIVE' : '● STANDBY'}</span></div>
         <div className="camera-source-grid">
           <button className={source === 'usb' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('usb'); }}><Monitor/><b>USB / PC</b><small>Webcam and capture card</small></button>
           <button className={source === 'phone' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('phone'); }}><Smartphone/><b>Phone camera</b><small>Use the rear camera on this device</small></button>
-          <button className={source === 'ip' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('ip'); }}><Wifi/><b>IP / RTSP</b><small>Bridge network streams locally</small></button>
+          <button className={source === 'ip' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('ip'); }}><Wifi/><b>IP / RTSP</b><small>Bridge network streams through the paired PC</small></button>
         </div>
         {source === 'usb' && <div className="camera-field"><label>Browser camera</label><select value={deviceId} onChange={e => setDeviceId(e.target.value)}><option value="">Default camera</option>{devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Camera ' + (i + 1)}</option>)}</select><button className="camera-link" onClick={() => void refreshDevices()}><RefreshCw size={14}/> Refresh devices</button><small>{deviceResult?.available ? deviceResult.devices.length + ' DirectShow camera(s) detected by Windows' : 'Browser camera access is available; install FFmpeg to enable Windows-level device discovery.'}</small></div>}
-        {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This option uses the rear camera of the device currently viewing the page. The local Windows-only URL cannot be opened from a phone; phone-to-PC relay and secure pairing are not included yet.</span></div>}
+        {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This uses the rear camera of the device currently viewing the page. If opened on a phone over HTTPS, it can capture from that phone; live phone-to-PC video relay is a separate feature and is not enabled yet.</span></div>}
         {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are passed to the local FFmpeg process and are not intentionally written to app logs.</small><button className="camera-link" disabled={discovering} onClick={() => void discoverOnvif()}><Wifi size={14}/>{discovering ? 'Searching network…' : 'Discover ONVIF cameras'}</button>{onvifDevices.length > 0 && <div className="onvif-list">{onvifDevices.map(device => <div className="onvif-item" key={device.xaddr}><b>{device.name}</b><small>{device.xaddr}</small><button className="camera-link" onClick={async () => { try { const host = new URL(device.xaddr).hostname; await navigator.clipboard.writeText(host); setMessage('Copied camera host ' + host + '. Enter the RTSP path supplied by the camera manufacturer.'); } catch { setMessage('ONVIF endpoint: ' + device.xaddr); } }}>Copy camera host</button></div>)}</div>}{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
         <div className="camera-actions"><button className="primary" disabled={busy || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
         {error && <div className="error camera-error"><span>{error}</span><button onClick={() => setError('')}><X size={15}/></button></div>}
