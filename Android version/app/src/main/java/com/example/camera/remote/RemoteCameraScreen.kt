@@ -230,8 +230,7 @@ fun RemoteCameraScreen() {
 
 private fun isSupportedStreamAddress(value: String): Boolean {
     val candidate = value.trim()
-    return (candidate.startsWith("rtsp://", ignoreCase = true) ||
-        candidate.startsWith("rtsps://", ignoreCase = true)) &&
+    return candidate.startsWith("rtsp://", ignoreCase = true) &&
         runCatching { Uri.parse(candidate).host?.isNotBlank() == true }.getOrDefault(false)
 }
 
