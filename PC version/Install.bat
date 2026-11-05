@@ -64,8 +64,10 @@ if errorlevel 1 (
   if errorlevel 1 (
     echo winget was not found. You can install FFmpeg later from https://ffmpeg.org/download.html
   ) else (
-    set /p INSTALL_FFMPEG=Install FFmpeg now using winget? [Y/N]: 
-    if /I "%INSTALL_FFMPEG%"=="Y" (
+    choice /c YN /n /m "Install FFmpeg now using winget? [Y/N]: "
+    if errorlevel 2 (
+      echo Skipping FFmpeg. USB cameras will still work; RTSP can be enabled later.
+    ) else (
       winget install --id Gyan.FFmpeg.Shared --exact --silent --accept-package-agreements --accept-source-agreements
       if errorlevel 1 echo FFmpeg installation did not complete. USB cameras will still work; RTSP support can be installed later.
     )
