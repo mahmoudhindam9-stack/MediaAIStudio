@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import { Aperture, Camera, CameraOff, CheckCircle2, CircleHelp, Cpu, Monitor, Play, RefreshCw, Smartphone, Wifi, X } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { backend, jobForm } from '../api/backend';
 
-type Source = 'usb' | 'phone' | 'ip';
+type Source = 'usb' | 'phone' | 'ip' | 'wifi';
 type AgentHealth = { status?: string; ffmpeg?: { available: boolean; version?: string | null }; rtsp?: { active: boolean; source?: string | null; error?: string | null }; pairCode?: string | null; pairCodeExpiresAt?: number };
 type DeviceResult = { available: boolean; version?: string | null; devices: Array<{ name: string; kind: string }>; message?: string | null };
 type OnvifDevice = { name: string; xaddr: string; xaddrs: string[]; scopes: string[] };
@@ -33,6 +34,9 @@ export default function CameraPage() {
   const [agentToken, setAgentToken] = useState('');
   const [pairCodeInput, setPairCodeInput] = useState('');
   const [pairBusy, setPairBusy] = useState(false);
+  const [wifiQrUrl, setWifiQrUrl] = useState('');
+  const [wifiBusy, setWifiBusy] = useState(false);
+  const [wifiStatus, setWifiStatus] = useState('');
 
   const agentFetch = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
     const headers = new Headers(init.headers);
@@ -97,6 +101,63 @@ export default function CameraPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Pairing failed. Make sure MediaAIStudio is running on this PC.');
     } finally { setPairBusy(false); }
+  }
+
+
+  const waitForIce = (pc: RTCPeerConnection) => new Promise<void>(resolve => {
+    if (pc.iceGatheringState === 'complete') return resolve();
+    const timer = window.setTimeout(resolve, 12000);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') { window.clearTimeout(timer); resolve(); }
+    });
+  });
+
+  async function createWifiPairing() {
+    setWifiBusy(true); setError(''); setWifiQrUrl(''); setWifiStatus('Preparing secure phone connection…');
+    try {
+      let publicUrl: string | null = null;
+      for (let i = 0; i < 30 && !publicUrl; i++) {
+        const status = await fetch('/api/phone-relay/status').then(r => r.json());
+        publicUrl = status.publicUrl || null;
+        if (!publicUrl) await new Promise(resolve => window.setTimeout(resolve, 1000));
+      }
+      if (!publicUrl) throw new Error('Secure camera link is not ready. Install Cloudflare Tunnel (cloudflared) and restart MediaAIStudio.');
+      const session = await fetch('/api/phone-relay/session', { method: 'POST' }).then(async r => {
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not create a pairing session.'); return d;
+      });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      const remote = new MediaStream();
+      if (videoRef.current) videoRef.current.srcObject = remote;
+      pc.ontrack = event => {
+        event.streams[0]?.getTracks().forEach(track => remote.addTrack(track));
+        if (videoRef.current) { videoRef.current.srcObject = remote; void videoRef.current.play(); }
+        setActive(true); setWifiStatus('Phone camera connected successfully.');
+      };
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') setWifiStatus('Phone connection interrupted. Keep both devices on the same Wi-Fi network.');
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await waitForIce(pc);
+      const posted = await fetch('/api/phone-relay/session/' + session.id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer: pc.localDescription }) });
+      if (!posted.ok) throw new Error('Could not publish the camera connection offer.');
+      setWifiQrUrl(publicUrl + '/phone-camera.html?s=' + session.id);
+      setWifiStatus('Scan the QR code using your phone camera, then allow camera access.');
+      let connected = false;
+      for (let i = 0; i < 120 && !connected; i++) {
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+        const response = await fetch('/api/phone-relay/session/' + session.id).then(r => r.json());
+        if (response.answer) {
+          await pc.setRemoteDescription(response.answer);
+          connected = true;
+          setWifiStatus('Phone camera connected. Live video is arriving.');
+        }
+      }
+      if (!connected) setWifiStatus('Pairing timed out. Generate a new QR code and try again.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start the Wi-Fi camera connection.');
+      setWifiStatus('');
+    } finally { setWifiBusy(false); }
   }
 
   async function discoverOnvif() {
@@ -224,11 +285,13 @@ export default function CameraPage() {
           <button className={source === 'usb' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('usb'); }}><Monitor/><b>USB / PC</b><small>Webcam and capture card</small></button>
           <button className={source === 'phone' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('phone'); }}><Smartphone/><b>Phone camera</b><small>Use the rear camera on this device</small></button>
           <button className={source === 'ip' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('ip'); }}><Wifi/><b>IP / RTSP</b><small>Bridge network streams through the paired PC</small></button>
+          <button className={source === 'wifi' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('wifi'); setWifiQrUrl(''); }}><Smartphone/><b>Wi-Fi phone</b><small>Scan QR to send phone live camera</small></button>
         </div>
         {source === 'usb' && <div className="camera-field"><label>Browser camera</label><select value={deviceId} onChange={e => setDeviceId(e.target.value)}><option value="">Default camera</option>{devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Camera ' + (i + 1)}</option>)}</select><button className="camera-link" onClick={() => void refreshDevices()}><RefreshCw size={14}/> Refresh devices</button><small>{deviceResult?.available ? deviceResult.devices.length + ' DirectShow camera(s) detected by Windows' : 'Browser camera access is available; install FFmpeg to enable Windows-level device discovery.'}</small></div>}
+        {source === 'wifi' && <div className="camera-field"><div className="camera-tip"><Wifi size={18}/><span>Connect your phone to the same Wi-Fi network. A temporary secure link will open the camera page after scanning.</span></div><button className="primary" disabled={wifiBusy} onClick={() => void createWifiPairing()}>{wifiBusy ? 'Preparing QR code…' : 'Generate phone connection QR'}</button>{wifiQrUrl && <div className="wifi-qr-panel"><QRCodeSVG value={wifiQrUrl} size={210} bgColor="#ffffff" fgColor="#10131a" level="H"/><b>Scan with your phone</b><small>{wifiStatus}</small><button className="camera-link" onClick={() => void navigator.clipboard.writeText(wifiQrUrl)}>Copy secure phone link</button></div>}</div>}
         {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This uses the rear camera of the device currently viewing the page. If opened on a phone over HTTPS, it can capture from that phone; live phone-to-PC video relay is a separate feature and is not enabled yet.</span></div>}
         {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are passed to the local FFmpeg process and are not intentionally written to app logs.</small><button className="camera-link" disabled={discovering} onClick={() => void discoverOnvif()}><Wifi size={14}/>{discovering ? 'Searching network…' : 'Discover ONVIF cameras'}</button>{onvifDevices.length > 0 && <div className="onvif-list">{onvifDevices.map(device => <div className="onvif-item" key={device.xaddr}><b>{device.name}</b><small>{device.xaddr}</small><button className="camera-link" onClick={async () => { try { const host = new URL(device.xaddr).hostname; await navigator.clipboard.writeText(host); setMessage('Copied camera host ' + host + '. Enter the RTSP path supplied by the camera manufacturer.'); } catch { setMessage('ONVIF endpoint: ' + device.xaddr); } }}>Copy camera host</button></div>)}</div>}{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
-        <div className="camera-actions"><button className="primary" disabled={busy || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
+        <div className="camera-actions"><button className="primary" disabled={busy || source === 'wifi' || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
         {error && <div className="error camera-error"><span>{error}</span><button onClick={() => setError('')}><X size={15}/></button></div>}
         {message && <div className="camera-success"><CheckCircle2 size={15}/>{message}</div>}
       </section>
