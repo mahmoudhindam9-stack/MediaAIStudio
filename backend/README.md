@@ -9,7 +9,8 @@ This Express service is the server-side provider bridge for MediaAIStudio. Provi
 - POST /v1/ai/video/generate — Veo text/image-to-video, video-to-video, and source-video extension jobs.
 - POST /v1/ai/video/transcribe — Gemini video speech transcription with an optional language hint.
 - GET /v1/ai/jobs/:jobId and GET /v1/ai/files/:filename — job state and authenticated generated outputs.
-- GET /health — basic service health.
+- GET /health — public service and environment configuration health.
+- GET /v1/ai/status — authenticated provider and capability readiness for the configured Android app token.
 
 The backend currently stores job state in memory and generated files in temp_media/. Use persistent object storage and a durable queue for multi-instance production deployments. Add user-level authentication and rate limiting before making this service public. The shared Android app token is an app-to-backend gate only; any token embedded in an APK is extractable and is not a user identity.
 
@@ -43,7 +44,7 @@ From the backend directory run npm install, copy .env.example to .env, fill in t
 
 ## Configuration and deployment validation
 
-The `/health` endpoint reports whether the backend token, public HTTPS base URL, Gemini key, and FAL key are configured. These are configuration checks only; they do not prove that a provider account has access, quota, or credits. The Android client refuses sample/example endpoint URLs and sample tokens instead of marking Cloud AI ready.
+The `/health` endpoint reports whether the backend token, public HTTPS base URL, Gemini key, and FAL key are configured. The authenticated `/v1/ai/status` endpoint additionally verifies that the Android app token matches the backend token and reports each provider independently. These are configuration checks only; they do not prove that a provider account has access, quota, or credits. The Android client refuses sample/example endpoint URLs and sample tokens instead of marking Cloud AI ready.
 
 For object removal and generative fill, `maskData` can be a raw base64-encoded image or a `data:image/...;base64,` URI. When supplied, the backend passes it to Gemini as a separate guide image so the operation can target the selected region.
 
