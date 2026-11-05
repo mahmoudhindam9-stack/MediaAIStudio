@@ -77,27 +77,27 @@ jobs:
       - name: Upload ARM64 debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-debug-arm64-v8a
+          name: MediaAIStudio-Standalone-1.8.0-debug-arm64-v8a
           path: Android version/app/build/outputs/apk/debug/*arm64-v8a*.apk
           if-no-files-found: error
 
       - name: Upload ARMv7 debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-debug-armeabi-v7a
+          name: MediaAIStudio-Standalone-1.8.0-debug-armeabi-v7a
           path: Android version/app/build/outputs/apk/debug/*armeabi-v7a*.apk
           if-no-files-found: error
 
       - name: Upload x86 debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-debug-x86
+          name: MediaAIStudio-Standalone-1.8.0-debug-x86
           path: Android version/app/build/outputs/apk/debug/*-x86-debug.apk
           if-no-files-found: error
 
       - name: Upload x86_64 debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-debug-x86_64
+          name: MediaAIStudio-Standalone-1.8.0-debug-x86_64
           path: Android version/app/build/outputs/apk/debug/*x86_64*.apk
           if-no-files-found: error
