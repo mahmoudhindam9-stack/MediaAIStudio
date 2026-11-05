@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ai.core.AIProviderType
 import com.example.ai.model.*
+import com.example.ai.generative.CloudGenerativeClient
+import com.example.ai.generative.BackendHealth
 import com.example.ai.generative.GenerativeEngine
 import com.example.ai.generative.GenerativeRequest
 import com.example.ai.generative.GenerativeResult
@@ -28,6 +30,8 @@ import com.example.ai.provider.AIProviderManager
 import com.example.ui.components.AppTopBar
 import com.example.ui.components.GlassSurface
 import com.example.ui.components.SectionHeader
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,6 +57,17 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val modelManager = remember { AppModelManager(context) }
     val modelStates by modelManager.artifacts.states.collectAsState()
     val trellisEngine = remember { GenerativeEngine(context.applicationContext) }
+    val cloudClient = remember { CloudGenerativeClient(context.applicationContext) }
+    var backendHealth by remember { mutableStateOf<BackendHealth?>(null) }
+    var checkingBackend by remember { mutableStateOf(false) }
+    var activatingModels by remember { mutableStateOf(false) }
+    var activationMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(cloudClient) {
+        checkingBackend = true
+        backendHealth = cloudClient.checkBackendHealth()
+        checkingBackend = false
+    }
     val trellisJobs by trellisEngine.jobs.collectAsState()
     var trellisImageUri by remember { mutableStateOf<Uri?>(null) }
     var activeTrellisJobId by remember { mutableStateOf<String?>(null) }
@@ -62,6 +77,12 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val trellisBusy = activeTrellisJob?.state?.let {
         it in setOf(JobState.QUEUED, JobState.PREPARING, JobState.UPLOADING, JobState.PROCESSING, JobState.DOWNLOADING)
     } == true
+
+    LaunchedEffect(modelManager) {
+        withContext(Dispatchers.IO) {
+            modelManager.artifacts.refreshInstalledStates()
+        }
+    }
 
     val pickTrellisImage = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -92,7 +113,15 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     }
 
     val isLocalAvailable = remember { providerManager.getProvider(AIProviderType.ON_DEVICE).isAvailable }
-    val isCloudAvailable = remember { providerManager.getProvider(AIProviderType.CLOUD).isAvailable }
+    val isCloudConfigured = providerManager.getProvider(AIProviderType.CLOUD).isAvailable
+    val backendCanAcceptRequests = backendHealth?.reachable == true &&
+        backendHealth?.backendAuthConfigured == true && backendHealth?.authenticated == true &&
+        backendHealth?.publicBaseUrlConfigured == true
+    val isGeminiAvailable = isCloudConfigured && backendCanAcceptRequests &&
+        backendHealth?.geminiConfigured == true
+    val isTrellisAvailable = isCloudConfigured && backendCanAcceptRequests &&
+        backendHealth?.trellisConfigured == true
+    val isCloudAvailable = isGeminiAvailable
 
     val models = remember(modelStates) { modelManager.getAvailableModels() }
     val localModels = remember(models) {
@@ -105,10 +134,20 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     }
 
     fun activateAllLocalModels() {
+        if (activatingModels) return
         coroutineScope.launch {
-            LOCAL_AI_MODEL_IDS.forEach { id ->
-                modelManager.downloadModel(id)
+            activatingModels = true
+            activationMessage = null
+            val results = LOCAL_AI_MODEL_IDS.map { id ->
+                async(Dispatchers.IO) { id to modelManager.downloadModel(id) }
+            }.awaitAll()
+            val failed = results.filter { it.second.isFailure }.map { it.first }
+            activationMessage = if (failed.isEmpty()) {
+                "All three downloadable on-device models are installed and ready."
+            } else {
+                "Some models could not be activated: " + failed.joinToString()
             }
+            activatingModels = false
         }
     }
 
@@ -136,15 +175,43 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
                         ProviderBadge(name = "On-Device", isAvailable = isLocalAvailable)
-                        ProviderBadge(name = "Cloud", isAvailable = isCloudAvailable)
+                        ProviderBadge(name = if (checkingBackend) "Cloud • Checking" else "Cloud", isAvailable = isCloudAvailable)
                     }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = when {
+                            backendHealth == null && checkingBackend -> "Checking AI backend connection…"
+                            backendHealth == null -> "Cloud backend is unreachable or its URL is not configured."
+                            else -> backendHealth?.let { health ->
+                                when {
+                                    !health.backendAuthConfigured -> "Backend access token is not configured."
+                                    !health.authenticated -> "App token does not match the backend token."
+                                    !health.publicBaseUrlConfigured -> "Backend public HTTPS URL is not configured."
+                                    else -> "Gemini: " + (if (health.geminiConfigured) "configured" else "missing key") +
+                                        " • TRELLIS: " + (if (health.trellisConfigured) "configured" else "missing key")
+                                }
+                            }.orEmpty()
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isCloudAvailable) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
+                    )
+                    TextButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                checkingBackend = true
+                                backendHealth = cloudClient.checkBackendHealth()
+                                checkingBackend = false
+                            }
+                        },
+                        enabled = !checkingBackend
+                    ) { Text(if (checkingBackend) "Checking…" else "Refresh connection") }
                 }
             }
 
             item {
                 TrellisToolCard(
                     imageSelected = trellisImageUri != null,
-                    cloudAvailable = isCloudAvailable,
+                    cloudAvailable = isTrellisAvailable,
                     busy = trellisBusy,
                     progress = activeTrellisJob?.progress ?: 0f,
                     status = activeTrellisJob?.message.orEmpty(),
@@ -162,7 +229,7 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = ::activateAllLocalModels,
-                    enabled = !allLocalReady && !anyLocalBusy,
+                    enabled = !allLocalReady && !anyLocalBusy && !activatingModels,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
@@ -171,11 +238,27 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (allLocalReady) "On-Device AI Activated" else "Activate 3 On-Device AI Tools")
+                    Text(when {
+                        allLocalReady -> "On-Device AI Activated"
+                        activatingModels -> "Activating models…"
+                        else -> "Activate 3 On-Device AI Tools"
+                    })
+                }
+                if (activatingModels) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                activationMessage?.let { message ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (allLocalReady) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
+                    )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Downloads the three AI models once. They remain stored on the device across normal app updates.",
+                    text = "Downloads the three optional on-device models once. ML Kit tools are included separately; cloud tools need working provider credentials.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -313,7 +396,17 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                 Triple(R.string.ai_enhance, AICapability.ENHANCEMENT, Icons.Default.AutoFixHigh),
                 Triple(R.string.ai_restyle, AICapability.RESTYLE, Icons.Default.Brush),
                 Triple(R.string.ai_gen_fill, AICapability.GENERATIVE_FILL, Icons.Default.FormatPaint),
-                Triple(R.string.ai_img_to_img, AICapability.IMAGE_TO_IMAGE, Icons.Default.Transform)
+                Triple(R.string.ai_img_to_img, AICapability.IMAGE_TO_IMAGE, Icons.Default.Transform),
+                Triple(R.string.ai_gen_fill, AICapability.OBJECT_REPLACEMENT, Icons.Default.Transform),
+                Triple(R.string.ai_object_detection, AICapability.VIDEO_OBJECT_DETECTION, Icons.Default.Search),
+                Triple(R.string.ai_object_tracking, AICapability.VIDEO_OBJECT_TRACKING, Icons.Default.Search),
+                Triple(R.string.ai_smart_cut, AICapability.SMART_CUT, Icons.Default.AutoFixHigh),
+                Triple(R.string.ai_auto_captions, AICapability.AUTO_CAPTIONS, Icons.Default.Subtitles),
+                Triple(R.string.ai_video_enhance, AICapability.VIDEO_ENHANCEMENT, Icons.Default.AutoFixHigh),
+                Triple(R.string.ai_smart_reframe, AICapability.SMART_REFRAME, Icons.Default.Crop),
+                Triple(R.string.ai_img_to_vid, AICapability.IMAGE_TO_VIDEO, Icons.Default.Movie),
+                Triple(R.string.ai_vid_to_vid, AICapability.VIDEO_TO_VIDEO, Icons.Default.Movie),
+                Triple(R.string.ai_vid_ext, AICapability.VIDEO_EXTENSION, Icons.Default.Movie)
             )
 
             items(tools.size) { index ->
@@ -329,7 +422,11 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                         AICapabilityStatus.AVAILABLE -> "Ready" to MaterialTheme.colorScheme.tertiary
                         AICapabilityStatus.UNAVAILABLE -> "Unavailable" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.REQUIRES_MODEL -> "Download Required" to MaterialTheme.colorScheme.secondary
-                        AICapabilityStatus.REQUIRES_CLOUD -> "Cloud Only" to MaterialTheme.colorScheme.primary
+                        AICapabilityStatus.REQUIRES_CLOUD -> if (isGeminiAvailable) {
+                            "Cloud Ready" to MaterialTheme.colorScheme.tertiary
+                        } else {
+                            "Cloud Setup Required" to MaterialTheme.colorScheme.error
+                        }
                         AICapabilityStatus.DEVICE_NOT_SUPPORTED -> "Not Supported" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.REQUIRES_PROVIDER -> "Setup Required" to MaterialTheme.colorScheme.error
                         AICapabilityStatus.PROCESSING -> "Processing..." to MaterialTheme.colorScheme.primary

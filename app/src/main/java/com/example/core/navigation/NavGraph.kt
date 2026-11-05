@@ -1,5 +1,6 @@
 package com.example.core.navigation
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -40,7 +41,7 @@ fun AppNavGraph(startDestination: Screen = Screen.Home) {
         NavHost(
             navController = navController,
             startDestination = startDestination,
-            modifier = Modifier.padding(innerPadding)
+            modifier = Modifier.fillMaxSize().padding(innerPadding)
         ) {
             composable<Screen.Home> { HomeScreen(navController) }
             composable<Screen.Camera> {

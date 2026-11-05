@@ -42,6 +42,23 @@ function requireAuth(req, res, next) {
     next();
 }
 
+router.get('/status', requireAuth, (req, res) => {
+    const geminiConfigured = isConfiguredSecret(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
+    const trellisConfigured = isConfiguredSecret(process.env.FAL_KEY);
+    res.json({
+        status: 'ok',
+        authenticated: true,
+        providers: { gemini: geminiConfigured, trellis: trellisConfigured },
+        capabilities: {
+            imageProcessing: geminiConfigured,
+            imageGeneration: geminiConfigured,
+            videoGeneration: geminiConfigured,
+            videoTranscription: geminiConfigured,
+            imageTo3D: trellisConfigured
+        }
+    });
+});
+
 function requestData(req) {
     const parameters = {};
     for (const [key, value] of Object.entries(req.body || {})) {

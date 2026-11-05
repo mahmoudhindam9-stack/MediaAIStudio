@@ -61,6 +61,43 @@ class CloudGenerativeClient(
     val isConfigured: Boolean
         get() = hasUsableBackendUrl() && !isPlaceholder(apiKey)
 
+    suspend fun checkBackendHealth(): BackendHealth? = withContext(Dispatchers.IO) {
+        if (!hasUsableBackendUrl()) return@withContext null
+        val origin = baseUrl.substringBefore("/v1/ai").trimEnd('/')
+        try {
+            val healthRequest = Request.Builder().url("$origin/health").get().build()
+            val publicHealth = client.newCall(healthRequest).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body?.string().orEmpty()
+                if (body.isBlank()) return@withContext null
+                JSONObject(body)
+            }
+
+            val statusRequest = Request.Builder()
+                .url("$baseUrl/status")
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+            val authenticatedStatus = client.newCall(statusRequest).execute().use { response ->
+                if (!response.isSuccessful) null
+                else response.body?.string()?.takeIf { it.isNotBlank() }?.let(::JSONObject)
+            }
+            val providers = authenticatedStatus?.optJSONObject("providers") ?: JSONObject()
+            BackendHealth(
+                reachable = publicHealth.optString("status") == "ok",
+                backendAuthConfigured = publicHealth.optBoolean("backendAuthConfigured"),
+                publicBaseUrlConfigured = publicHealth.optBoolean("publicBaseUrlConfigured"),
+                authenticated = authenticatedStatus?.optBoolean("authenticated") == true,
+                geminiConfigured = providers.optBoolean("gemini"),
+                trellisConfigured = providers.optBoolean("trellis"),
+                readyForCloudOperations = authenticatedStatus?.optString("status") == "ok" &&
+                    providers.optBoolean("gemini")
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun processImageRequest(
         request: AIRequest,
         onProgress: (AIProgress) -> Unit
@@ -466,4 +503,14 @@ data class GenerativeJobResponse(
     val progress: Float,
     val errorReason: String?,
     val outputUrl: String?
+)
+
+data class BackendHealth(
+    val reachable: Boolean,
+    val backendAuthConfigured: Boolean,
+    val publicBaseUrlConfigured: Boolean,
+    val authenticated: Boolean,
+    val geminiConfigured: Boolean,
+    val trellisConfigured: Boolean,
+    val readyForCloudOperations: Boolean
 )

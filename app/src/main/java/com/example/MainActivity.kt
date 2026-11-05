@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.example.core.navigation.AppNavGraph
+import com.example.core.navigation.Screen
 import com.example.core.theme.MediaAIStudioTheme
 import com.example.settings.SettingsPreferences
 import com.example.settings.AppTheme
@@ -17,11 +18,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        
-        val startDestination: com.example.core.navigation.Screen = if (intent.getBooleanExtra("SHOW_UPDATES", false)) {
-            com.example.core.navigation.Screen.Update
-        } else {
-            com.example.core.navigation.Screen.Home
+
+        val launchedComponent = intent.component?.className.orEmpty()
+        val startDestination: Screen = when {
+            launchedComponent.endsWith(".CameraLauncherAlias") -> Screen.Camera
+            launchedComponent.endsWith(".GalleryLauncherAlias") -> Screen.Library
+            intent.getBooleanExtra("SHOW_UPDATES", false) -> Screen.Update
+            else -> Screen.Home
         }
 
         setContent {

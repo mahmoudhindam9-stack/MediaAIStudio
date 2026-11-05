@@ -140,7 +140,7 @@ class AppModelManager(context: Context) : ModelManager {
             AICapability.IMAGE_TO_VIDEO,
             AICapability.VIDEO_TO_VIDEO,
             AICapability.VIDEO_EXTENSION -> AICapabilityStatus.REQUIRES_CLOUD
-            AICapability.VIDEO_ENHANCEMENT -> AICapabilityStatus.DEVICE_NOT_SUPPORTED
+            AICapability.VIDEO_ENHANCEMENT -> AICapabilityStatus.AVAILABLE
         }
     }
 }
