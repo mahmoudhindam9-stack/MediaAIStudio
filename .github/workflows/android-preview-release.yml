@@ -1,0 +1,47 @@
+name: Publish Android 1.8.0 Preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android-preview-release.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the verified standalone 1.8.0 APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 42100428057
+          github-token: ${{ github.token }}
+          pattern: MediaAIStudio-Standalone-1.8.0-debug-*
+          merge-multiple: true
+          path: dist
+
+      - name: Verify APK files and prepare checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find dist -type f -name '*.apk' -print | sort)
+          if [ "${#apks[@]}" -ne 4 ]; then
+            echo "::error::Expected four ABI APKs, found ${#apks[@]}."
+            find dist -maxdepth 3 -type f -print
+            exit 1
+          fi
+          sha256sum "${apks[@]}" > dist/SHA256SUMS.txt
+
+      - name: Publish Android preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create android-v1.8.0-preview dist/*.apk dist/SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "MediaAIStudio Android 1.8.0 Preview" \
+            --prerelease \
+            --notes "Android standalone 1.8.0 preview build. This is a debug-signed test release, not a production-signed APK. It uses the separate application ID com.mediaaistudio.standalone so it can coexist with the preserved 1.7.0 installation. Four ABI APKs are attached (arm64-v8a, armeabi-v7a, x86, x86_64). SHA-256 checksums are included. Install the APK matching your device architecture."
