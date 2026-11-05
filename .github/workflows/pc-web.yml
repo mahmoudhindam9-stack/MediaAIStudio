@@ -1,4 +1,7 @@
 name: MediaAIStudio PC workspace
+
+permissions:
+  contents: write
 on:
   pull_request:
     paths:
@@ -54,11 +57,28 @@ jobs:
           find "$RUNNER_TEMP/pc-package/MediaAIStudio" -type f -name ".env" -delete
           rm -rf "$RUNNER_TEMP/pc-package/MediaAIStudio/logs"
           cd "$RUNNER_TEMP/pc-package"
-          zip -qr "$RUNNER_TEMP/MediaAIStudio-PC-Setup.zip" MediaAIStudio
+          zip -qr "$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.0.zip" MediaAIStudio
       - name: Upload portable Windows setup package
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-PC-Setup
-          path: ${{ runner.temp }}/MediaAIStudio-PC-Setup.zip
+          name: MediaAIStudio-PC-Setup-v1.8.0
+          path: ${{ runner.temp }}/MediaAIStudio-PC-Setup-v1.8.0.zip
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish independent PC release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="pc-v1.8.0"
+          asset="$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.0.zip"
+          notes=$(printf "MediaAIStudio PC 1.8.0\\n\\nStandalone Windows workspace package. Includes Camera studio with USB/webcam access, IP/RTSP support through FFmpeg, ONVIF discovery, and verified Desktop + Start Menu shortcuts.\\n\\nPhone-to-PC live camera relay is not included in this release.")
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+            gh release edit "$tag" --title "MediaAIStudio PC 1.8.0" --notes "$notes" --prerelease=false
+          else
+            gh release create "$tag" "$asset" --title "MediaAIStudio PC 1.8.0" --notes "$notes" --latest=false
+          fi
