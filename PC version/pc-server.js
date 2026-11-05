@@ -12,6 +12,7 @@ const PORT = 4173;
 const BACKEND_PORT = 3100;
 const CAMERA_AGENT_PORT = 3101;
 const CAMERA_AGENT_TOKEN = crypto.randomBytes(32).toString('hex');
+const CAMERA_PAIR_CODE = String(crypto.randomInt(10000000, 99999999));
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -52,7 +53,7 @@ const backendOut = fs.createWriteStream(backendLog, { flags: 'a' });
 const backendErr = fs.createWriteStream(backendLog, { flags: 'a' });
 const cameraAgent = spawn(process.execPath, ['camera-agent.js'], {
   cwd: root,
-  env: { ...process.env, CAMERA_AGENT_PORT: String(CAMERA_AGENT_PORT), CAMERA_AGENT_TOKEN },
+  env: { ...process.env, CAMERA_AGENT_PORT: String(CAMERA_AGENT_PORT), CAMERA_AGENT_TOKEN, CAMERA_PAIR_CODE },
   stdio: ['ignore', backendOut, backendErr],
   windowsHide: true
 });
