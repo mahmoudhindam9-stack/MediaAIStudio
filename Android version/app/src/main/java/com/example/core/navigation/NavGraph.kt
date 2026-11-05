@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -25,6 +26,7 @@ import androidx.navigation.toRoute
 import com.example.R
 import com.example.ai.ui.AIToolsScreen
 import com.example.camera.CameraProScreen2
+import com.example.camera.remote.RemoteCameraScreen
 import com.example.home.HomeScreen
 import com.example.media.LibraryScreen
 import com.example.media.MediaDetailScreen

@@ -8,6 +8,9 @@ sealed class Screen {
     
     @Serializable
     data object Camera : Screen()
+
+    @Serializable
+    data object RemoteCamera : Screen()
     
     @Serializable
     data object Library : Screen()
