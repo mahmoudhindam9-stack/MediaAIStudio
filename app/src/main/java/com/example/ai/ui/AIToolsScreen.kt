@@ -115,7 +115,8 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
     val isLocalAvailable = remember { providerManager.getProvider(AIProviderType.ON_DEVICE).isAvailable }
     val isCloudConfigured = providerManager.getProvider(AIProviderType.CLOUD).isAvailable
     val backendCanAcceptRequests = backendHealth?.reachable == true &&
-        backendHealth?.backendAuthConfigured == true && backendHealth?.publicBaseUrlConfigured == true
+        backendHealth?.backendAuthConfigured == true && backendHealth?.authenticated == true &&
+        backendHealth?.publicBaseUrlConfigured == true
     val isGeminiAvailable = isCloudConfigured && backendCanAcceptRequests &&
         backendHealth?.geminiConfigured == true
     val isTrellisAvailable = isCloudConfigured && backendCanAcceptRequests &&
@@ -184,6 +185,7 @@ fun AIToolsScreen(onNavigateBack: () -> Unit) {
                             else -> backendHealth?.let { health ->
                                 when {
                                     !health.backendAuthConfigured -> "Backend access token is not configured."
+                                    !health.authenticated -> "App token does not match the backend token."
                                     !health.publicBaseUrlConfigured -> "Backend public HTTPS URL is not configured."
                                     else -> "Gemini: " + (if (health.geminiConfigured) "configured" else "missing key") +
                                         " • TRELLIS: " + (if (health.trellisConfigured) "configured" else "missing key")
