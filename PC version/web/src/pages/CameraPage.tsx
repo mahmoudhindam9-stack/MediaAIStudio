@@ -7,6 +7,7 @@ import { backend, jobForm } from '../api/backend';
 type Source = 'usb' | 'phone' | 'ip';
 type AgentHealth = { status?: string; ffmpeg?: { available: boolean; version?: string | null }; rtsp?: { active: boolean; source?: string | null; error?: string | null } };
 type DeviceResult = { available: boolean; version?: string | null; devices: Array<{ name: string; kind: string }>; message?: string | null };
+type OnvifDevice = { name: string; xaddr: string; xaddrs: string[]; scopes: string[] };
 
 export default function CameraPage() {
   const navigate = useNavigate();
@@ -19,6 +20,8 @@ export default function CameraPage() {
   const [rtspUrl, setRtspUrl] = useState('');
   const [agent, setAgent] = useState<AgentHealth | null>(null);
   const [deviceResult, setDeviceResult] = useState<DeviceResult | null>(null);
+  const [onvifDevices, setOnvifDevices] = useState<OnvifDevice[]>([]);
+  const [discovering, setDiscovering] = useState(false);
   const [active, setActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -73,6 +76,18 @@ export default function CameraPage() {
     try { await agentFetch('/rtsp/stop', { method: 'POST', body: '{}' }); } catch {}
     setActive(false);
   }, [agentFetch]);
+
+  async function discoverOnvif() {
+    setDiscovering(true);
+    setError('');
+    try {
+      const result = await agentFetch<{ devices: OnvifDevice[]; message?: string | null }>('/onvif/discover', { method: 'POST', body: '{}' });
+      setOnvifDevices(result.devices || []);
+      setMessage(result.devices.length ? 'Found ' + result.devices.length + ' ONVIF camera endpoint(s). Use the device address to complete the RTSP stream URL.' : 'No ONVIF cameras replied. Check that the PC and cameras are on the same network and that multicast is allowed.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'ONVIF discovery failed.');
+    } finally { setDiscovering(false); }
+  }
 
   async function connectCamera() {
     setError('');
@@ -185,7 +200,7 @@ export default function CameraPage() {
         </div>
         {source === 'usb' && <div className="camera-field"><label>Browser camera</label><select value={deviceId} onChange={e => setDeviceId(e.target.value)}><option value="">Default camera</option>{devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Camera ' + (i + 1)}</option>)}</select><button className="camera-link" onClick={() => void refreshDevices()}><RefreshCw size={14}/> Refresh devices</button><small>{deviceResult?.available ? deviceResult.devices.length + ' DirectShow camera(s) detected by Windows' : 'Browser camera access is available; install FFmpeg to enable Windows-level device discovery.'}</small></div>}
         {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This option uses the rear camera of the device currently viewing the page. The local Windows-only URL cannot be opened from a phone; phone-to-PC relay and secure pairing are not included yet.</span></div>}
-        {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are sent only to the local companion process and are not written to the app logs.</small>{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
+        {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are passed to the local FFmpeg process and are not intentionally written to app logs.</small><button className="camera-link" disabled={discovering} onClick={() => void discoverOnvif()}><Wifi size={14}/>{discovering ? 'Searching network…' : 'Discover ONVIF cameras'}</button>{onvifDevices.length > 0 && <div className="onvif-list">{onvifDevices.map(device => <div className="onvif-item" key={device.xaddr}><b>{device.name}</b><small>{device.xaddr}</small><button className="camera-link" onClick={async () => { try { const host = new URL(device.xaddr).hostname; await navigator.clipboard.writeText(host); setMessage('Copied camera host ' + host + '. Enter the RTSP path supplied by the camera manufacturer.'); } catch { setMessage('ONVIF endpoint: ' + device.xaddr); } }}>Copy camera host</button></div>)}</div>}{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
         <div className="camera-actions"><button className="primary" disabled={busy || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
         {error && <div className="error camera-error"><span>{error}</span><button onClick={() => setError('')}><X size={15}/></button></div>}
         {message && <div className="camera-success"><CheckCircle2 size={15}/>{message}</div>}
