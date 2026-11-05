@@ -160,7 +160,9 @@ export default function CameraPage() {
   useEffect(() => {
     void refreshAgent();
     void refreshDevices();
+    const agentRetry = window.setInterval(() => { void refreshAgent(); }, 5000);
     return () => {
+      window.clearInterval(agentRetry);
       streamRef.current?.getTracks().forEach(track => track.stop());
       hlsRef.current?.destroy();
       void agentFetch('/rtsp/stop', { method: 'POST', body: '{}' });
@@ -182,7 +184,7 @@ export default function CameraPage() {
           <button className={source === 'ip' ? 'camera-source selected' : 'camera-source'} onClick={() => { void stopCamera(); setSource('ip'); }}><Wifi/><b>IP / RTSP</b><small>Bridge network streams locally</small></button>
         </div>
         {source === 'usb' && <div className="camera-field"><label>Browser camera</label><select value={deviceId} onChange={e => setDeviceId(e.target.value)}><option value="">Default camera</option>{devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || 'Camera ' + (i + 1)}</option>)}</select><button className="camera-link" onClick={() => void refreshDevices()}><RefreshCw size={14}/> Refresh devices</button><small>{deviceResult?.available ? deviceResult.devices.length + ' DirectShow camera(s) detected by Windows' : 'Browser camera access is available; install FFmpeg to enable Windows-level device discovery.'}</small></div>}
-        {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>Open this local workspace on the phone itself to use its rear camera. A later phone-to-PC relay needs a secure phone pairing connection; this mode does not claim to transmit the phone feed to another computer.</span></div>}
+        {source === 'phone' && <div className="camera-tip"><Smartphone size={18}/><span>This option uses the rear camera of the device currently viewing the page. The local Windows-only URL cannot be opened from a phone; phone-to-PC relay and secure pairing are not included yet.</span></div>}
         {source === 'ip' && <div className="camera-field"><label>RTSP camera address</label><input type="password" autoComplete="off" value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} placeholder="rtsp://username:password@192.168.1.20:554/stream1"/><small>Credentials are sent only to the local companion process and are not written to the app logs.</small>{!agent?.ffmpeg?.available && <div className="camera-warning">FFmpeg is not detected. Install FFmpeg and restart the app to enable RTSP-to-HLS conversion.</div>}</div>}
         <div className="camera-actions"><button className="primary" disabled={busy || (source === 'ip' && !agent?.ffmpeg?.available)} onClick={active ? () => void stopCamera() : () => void connectCamera()}>{active ? <><CameraOff size={16}/> Stop camera</> : <><Play size={16}/>{busy ? 'Connecting…' : 'Connect camera'}</>}</button><button className="secondary" disabled={!active} onClick={capture}><Camera size={16}/> Capture frame</button></div>
         {error && <div className="error camera-error"><span>{error}</span><button onClick={() => setError('')}><X size={15}/></button></div>}
