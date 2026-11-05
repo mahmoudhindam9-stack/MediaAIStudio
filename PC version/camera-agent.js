@@ -24,11 +24,36 @@ fs.mkdirSync(MEDIA_DIR, { recursive: true });
 let streamProcess = null;
 let streamState = { active: false, source: null, startedAt: null, error: null };
 
+function suppliedToken(req) {
+  return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+}
 function authorized(req) {
-  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const supplied = suppliedToken(req);
   const a = Buffer.from(supplied);
   const b = Buffer.from(TOKEN);
-  return b.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (b.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  const session = sessions.get(supplied);
+  if (!session) return false;
+  if (session.expiresAt <= Date.now()) { sessions.delete(supplied); return false; }
+  return true;
+}
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || '');
+  let allowed = extraOrigins.has(origin);
+  try {
+    const parsed = new URL(origin);
+    allowed = allowed || (parsed.protocol === 'https:' && parsed.hostname.endsWith('.vercel.app'));
+  } catch {}
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    if (req.headers['access-control-request-private-network'] === 'true') {
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+  }
+  return allowed;
 }
 function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
