@@ -52,7 +52,7 @@ android {
     val permanentReleaseCertSha256 = (
       getResolvedEnv("PERMANENT_RELEASE_CERT_SHA256")
         ?: getResolvedEnv("RELEASE_CERT_SHA256")
-        ?: "305e793b81fc46944d01258eeeab404f77766c03f14d3f076b2ce81494d82a73"
+        ?: ""
     ).trim().lowercase().replace(":", "")
     buildConfigField("String", "PERMANENT_RELEASE_CERT_SHA256", buildConfigString(permanentReleaseCertSha256))
   }
