@@ -33,8 +33,9 @@ Open **Camera studio** from the left navigation inside the PC app.
 
 - **USB / PC webcams:** use the browser camera permission prompt and select a connected webcam. FFmpeg is optional for Windows-level DirectShow device enumeration.
 - **IP cameras:** install FFmpeg and enter an `rtsp://` or `rtsps://` URL in Camera studio. FFmpeg converts the stream to a temporary local HLS playlist. ONVIF discovery can find compatible cameras on the same local network.
-- **Phone camera:** uses the camera on the device currently viewing the app. Opening the PC app on the PC uses the PC's available camera; it does not relay a phone's live camera feed to the PC.
-- **Phone-to-PC live relay:** not included in this release.
+- **Phone camera:** uses the camera on the device currently viewing the app.
+- **Wi-Fi phone camera:** choose **Wi-Fi phone** in Camera studio, generate the QR code on the PC, scan it with the phone, and approve camera access. The live video is sent directly to the PC using WebRTC; the temporary Cloudflare HTTPS tunnel is restricted to the pairing page and short-lived signaling messages, not the app or backend API. Both devices should be on the same Wi-Fi network. Pairing sessions expire after 10 minutes. The phone must keep the camera page open.
+- The installer attempts to install Cloudflare Tunnel (`cloudflared`) for the secure camera permission page. If it is missing, install it with `winget install --id Cloudflare.cloudflared` and restart MediaAIStudio.
 - Camera credentials are passed to the local FFmpeg process. They are not intentionally written to app logs or sent to the AI provider. Avoid reusing administrator passwords where possible.
 - Captured frames stay in the browser until you explicitly choose **Send snapshot to AI**. Only then are they uploaded to the configured AI backend.
 - The camera companion binds to loopback only; it is not exposed to the LAN or public internet.
