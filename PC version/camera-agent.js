@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const dgram = require('dgram');
 const { spawn } = require('child_process');
 
 const PORT = Number(process.env.CAMERA_AGENT_PORT || 3101);
@@ -105,12 +106,74 @@ function startRtsp(url) {
   streamState = { active: true, source: parsed.hostname, startedAt: new Date().toISOString(), error: null };
   return { ok: true, playlist: '/api/camera/hls/stream.m3u8', status: streamState };
 }
+
+function parseOnvifResponse(buffer) {
+  const xml = buffer.toString('utf8');
+  const getTag = (name) => {
+    const match = xml.match(new RegExp('<(?:\\w+:)?' + name + '[^>]*>([\\s\\S]*?)<\\/(?:\\w+:)?' + name + '>', 'i'));
+    return match ? match[1].replace(/&amp;/g, '&').trim() : '';
+  };
+  const xaddrs = getTag('XAddrs').split(/\s+/).filter(Boolean);
+  const scopes = getTag('Scopes').split(/\s+/).filter(Boolean);
+  const endpoint = getTag('Address');
+  if (!xaddrs.length) return null;
+  return {
+    endpoint,
+    xaddrs,
+    scopes,
+    name: scopes.map(scope => {
+      const part = scope.split('/').filter(Boolean).pop() || '';
+      try { return decodeURIComponent(part); } catch { return part; }
+    }).find(value => value && !value.includes(':')) || 'ONVIF camera'
+  };
+}
+function discoverOnvif() {
+  return new Promise(resolve => {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    const found = new Map();
+    let finished = false;
+    const finish = (message) => {
+      if (finished) return;
+      finished = true;
+      try { socket.close(); } catch {}
+      resolve({ devices: Array.from(found.values()), message: message || null });
+    };
+    const timer = setTimeout(() => finish(null), 3500);
+    socket.on('message', packet => {
+      const device = parseOnvifResponse(packet);
+      if (device) for (const address of device.xaddrs) found.set(address, { ...device, xaddr: address });
+    });
+    socket.on('error', error => { clearTimeout(timer); finish(error.message); });
+    socket.bind(0, () => {
+      try {
+        socket.addMembership('239.255.255.250');
+        socket.setMulticastTTL(2);
+        const messageId = 'uuid:' + crypto.randomUUID();
+        const probe = '<?xml version="1.0" encoding="UTF-8"?>' +
+          '<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl">' +
+          '<e:Header><w:MessageID>' + messageId + '</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>' +
+          '<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>';
+        socket.send(Buffer.from(probe), 3702, '239.255.255.250', error => {
+          if (error) { clearTimeout(timer); finish(error.message); }
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        finish(error.message);
+      }
+    });
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   if (!authorized(req)) return send(res, 401, { error: 'UNAUTHORIZED' });
   if (req.method === 'GET' && url.pathname === '/health') {
     const ffmpeg = await ffmpegAvailable();
     return send(res, 200, { status: 'ok', ffmpeg, rtsp: streamState });
+  }
+  if (req.method === 'POST' && url.pathname === '/onvif/discover') {
+    const result = await discoverOnvif();
+    return send(res, 200, result);
   }
   if (req.method === 'GET' && url.pathname === '/devices') {
     return send(res, 200, await listDevices());
