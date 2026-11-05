@@ -49,6 +49,7 @@ const sessionsCleanup=setInterval(()=>{for(const [id,s] of phoneSessions)if(s.ex
 
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url||'/', 'http://127.0.0.1');
+ if(u.pathname==='/api/phone-relay/status'&&req.method==='GET')return send(res,200,{publicUrl:phonePublicUrl});
  if(u.pathname==='/api/phone-relay/session'&&req.method==='POST'){
   const id=crypto.randomBytes(16).toString('hex');phoneSessions.set(id,{offer:null,answer:null,expiresAt:Date.now()+10*60*1000,createdAt:Date.now()});
   return send(res,200,{id,publicUrl:phonePublicUrl,expiresAt:Date.now()+10*60*1000});
