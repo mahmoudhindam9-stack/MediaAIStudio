@@ -1,23 +1,29 @@
-*.iml
-.gradle
-.kotlin
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# Android / Gradle
+.gradle/
+.kotlin/
+**/build/
+**/.gradle/
+**/.kotlin/
 local.properties
-.env
-debug.keystore
-debug.keystore.base64
+*.iml
+.idea/
+.cxx/
+.externalNativeBuild/
+.DS_Store
+captures/
 *.keystore
 *.jks
-.build-outputs/
-*google-services.json
+debug.keystore
+debug.keystore.base64
+
+# PC edition
+PC version/backend/node_modules/
+PC version/backend/.env
+PC version/backend/temp_media/
+PC version/web/node_modules/
+PC version/web/dist/
+PC version/web/.env*
+!PC version/web/.env.example
+PC version/node_modules/
+PC version/logs/
+PC version/.media-ai-token

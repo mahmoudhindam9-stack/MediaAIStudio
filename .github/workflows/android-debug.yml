@@ -10,6 +10,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Android version
     env:
       MEDIA_AI_BACKEND_URL: ${{ secrets.MEDIA_AI_BACKEND_URL }}
       MEDIA_AI_BACKEND_API_KEY: ${{ secrets.MEDIA_AI_BACKEND_API_KEY }}
@@ -19,11 +22,11 @@ jobs:
 
       - name: Validate backend JavaScript syntax
         run: |
-          node --check backend/src/index.js
-          node --check backend/src/api/generate.js
-          node --check backend/src/ai/GenerativeService.js
-          node --check backend/src/jobs/JobManager.js
-          node --check backend/src/storage/StorageManager.js
+          node --check "../PC version/backend/src/index.js"
+          node --check "../PC version/backend/src/api/generate.js"
+          node --check "../PC version/backend/src/ai/GenerativeService.js"
+          node --check "../PC version/backend/src/jobs/JobManager.js"
+          node --check "../PC version/backend/src/storage/StorageManager.js"
 
       - name: Restore debug keystore
         shell: bash
@@ -59,7 +62,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kotlin-compile-diagnostics
-          path: compile.log
+          path: Android version/compile.log
           if-no-files-found: error
 
       - name: Run unit tests
@@ -75,26 +78,26 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MediaAIStudio-debug-arm64-v8a
-          path: app/build/outputs/apk/debug/*arm64-v8a*.apk
+          path: Android version/app/build/outputs/apk/debug/*arm64-v8a*.apk
           if-no-files-found: error
 
       - name: Upload ARMv7 debug APK
         uses: actions/upload-artifact@v4
         with:
           name: MediaAIStudio-debug-armeabi-v7a
-          path: app/build/outputs/apk/debug/*armeabi-v7a*.apk
+          path: Android version/app/build/outputs/apk/debug/*armeabi-v7a*.apk
           if-no-files-found: error
 
       - name: Upload x86 debug APK
         uses: actions/upload-artifact@v4
         with:
           name: MediaAIStudio-debug-x86
-          path: app/build/outputs/apk/debug/*-x86-debug.apk
+          path: Android version/app/build/outputs/apk/debug/*-x86-debug.apk
           if-no-files-found: error
 
       - name: Upload x86_64 debug APK
         uses: actions/upload-artifact@v4
         with:
           name: MediaAIStudio-debug-x86_64
-          path: app/build/outputs/apk/debug/*x86_64*.apk
+          path: Android version/app/build/outputs/apk/debug/*x86_64*.apk
           if-no-files-found: error

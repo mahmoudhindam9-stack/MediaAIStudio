@@ -12,6 +12,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Android version
     env:
       MEDIA_AI_BACKEND_URL: ${{ secrets.MEDIA_AI_BACKEND_URL }}
       MEDIA_AI_BACKEND_API_KEY: ${{ secrets.MEDIA_AI_BACKEND_API_KEY }}
@@ -24,11 +27,11 @@ jobs:
 
       - name: Validate backend JavaScript syntax
         run: |
-          node --check backend/src/index.js
-          node --check backend/src/api/generate.js
-          node --check backend/src/ai/GenerativeService.js
-          node --check backend/src/jobs/JobManager.js
-          node --check backend/src/storage/StorageManager.js
+          node --check "../PC version/backend/src/index.js"
+          node --check "../PC version/backend/src/api/generate.js"
+          node --check "../PC version/backend/src/ai/GenerativeService.js"
+          node --check "../PC version/backend/src/jobs/JobManager.js"
+          node --check "../PC version/backend/src/storage/StorageManager.js"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -68,6 +71,7 @@ jobs:
             echo "::error::RELEASE_CERT_SHA256 must be a 64-character SHA-256 fingerprint."
             exit 1
           fi
+
       - name: Set up Production Keystore
         id: setup_keystore
         shell: bash
@@ -89,7 +93,6 @@ jobs:
             echo "::error::Permanent release signing keystore is not provided! Configure RELEASE_KEYSTORE_BASE64 in GitHub Secrets."
             exit 1
           fi
-
           keytool -list -keystore "$RELEASE_KEYSTORE_PATH" -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" >/dev/null
 
       - name: Build release APK
@@ -103,16 +106,14 @@ jobs:
         run: |
           set -o pipefail
           if [ -z "$RELEASE_STORE_PASSWORD" ] || [ -z "$RELEASE_KEY_ALIAS" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
-            echo "::error::Permanent production signing secrets (RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD) are not fully configured in GitHub Secrets! Release builds must not fall back to ephemeral debug keys."
+            echo "::error::Permanent production signing secrets are not fully configured."
             exit 1
           fi
-
           gradle :app:assembleRelease --stacktrace 2>&1 | tee release-build.log
           status=${PIPESTATUS[0]}
           test "$status" -eq 0
-
           compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null
-          echo "asset_glob=app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
+          echo "asset_dir=app/build/outputs/apk/release" >> "$GITHUB_OUTPUT"
 
       - name: Read app version
         id: version
@@ -127,25 +128,23 @@ jobs:
         id: verify_apk
         shell: bash
         env:
-          ASSET_GLOB: ${{ steps.release_build.outputs.asset_glob }}
+          ASSET_DIR: ${{ steps.release_build.outputs.asset_dir }}
           EXPECTED_VERSION_NAME: ${{ steps.version.outputs.name }}
           EXPECTED_VERSION_CODE: ${{ steps.version.outputs.code }}
           RELEASE_CERT_SECRET: ${{ secrets.RELEASE_CERT_SHA256 }}
         run: |
           set -o pipefail
           shopt -s nullglob
-          apks=( $ASSET_GLOB )
+          apks=( "$ASSET_DIR"/*.apk )
           if [ "${#apks[@]}" -eq 0 ]; then
             echo "::error::No ABI-specific Release APKs were produced."
             exit 1
           fi
-
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | sort -V | tail -n1)
           if [ ! -x "$APKSIGNER" ]; then
             echo "::error::apksigner tool not found in Android SDK!"
             exit 1
           fi
-
           EXPECTED_SHA256=$(echo "$RELEASE_CERT_SECRET" | tr '[:upper:]' '[:lower:]' | tr -d ':')
           CERT_FINGERPRINT=""
           for apk in "${apks[@]}"; do
@@ -167,45 +166,39 @@ jobs:
             APK_SHA256=$(sha256sum "$apk" | awk '{print $1}')
             echo "$APK_SHA256  $(basename "$apk")" > "${apk}.sha256"
           done
-
           rm -f /tmp/release.keystore signer.txt
           echo "cert_sha256=$CERT_FINGERPRINT" >> "$GITHUB_OUTPUT"
-          echo "Verified ${#apks[@]} ABI APKs with the same permanent release certificate."
+
       - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET_GLOB: ${{ steps.release_build.outputs.asset_glob }}
+          ASSET_DIR: ${{ steps.release_build.outputs.asset_dir }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
           CERT_SHA256: ${{ steps.verify_apk.outputs.cert_sha256 }}
         run: |
           tag="v${VERSION_NAME}"
           shopt -s nullglob
-          apks=( $ASSET_GLOB )
+          apks=( "$ASSET_DIR"/*.apk )
           assets=()
           for apk in "${apks[@]}"; do
             assets+=("$apk" "${apk}.sha256")
           done
           test "${#assets[@]}" -gt 0
-
           title="MediaAIStudio $VERSION_NAME"
-          notes=$(printf "MediaAIStudio %s (versionCode %s)\\n\\nFour ABI-specific APKs are provided (arm64-v8a, armeabi-v7a, x86, x86_64). Install the APK matching your device CPU architecture.\\n\\nAll APKs passed apksigner verification with permanent certificate SHA-256: %s.\\n\\nChecksums are attached beside each APK." "$VERSION_NAME" "$VERSION_CODE" "$CERT_SHA256")
-
+          notes=$(printf "MediaAIStudio %s (versionCode %s)\n\nFour ABI-specific APKs are provided (arm64-v8a, armeabi-v7a, x86, x86_64). Install the APK matching your device CPU architecture.\n\nAll APKs passed apksigner verification with permanent certificate SHA-256: %s.\n\nChecksums are attached beside each APK." "$VERSION_NAME" "$VERSION_CODE" "$CERT_SHA256")
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; uploading ABI APKs and checksums..."
             gh release upload "$tag" "${assets[@]}" --clobber
             gh release edit "$tag" --title "$title" --notes "$notes" --prerelease=false
             exit 0
           fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git rev-parse "$tag" >/dev/null 2>&1; then
             git tag -a "$tag" -m "MediaAIStudio $VERSION_NAME"
             git push origin "$tag"
           fi
-
           gh release create "$tag" "${assets[@]}" --title "$title" --notes "$notes"
 
       - name: Upload build log
@@ -213,5 +206,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-build-log
-          path: release-build.log
+          path: Android version/release-build.log
           if-no-files-found: warn
