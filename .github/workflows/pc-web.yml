@@ -57,12 +57,12 @@ jobs:
           find "$RUNNER_TEMP/pc-package/MediaAIStudio" -type f -name ".env" -delete
           rm -rf "$RUNNER_TEMP/pc-package/MediaAIStudio/logs"
           cd "$RUNNER_TEMP/pc-package"
-          zip -qr "$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.0.zip" MediaAIStudio
+          zip -qr "$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.1.zip" MediaAIStudio
       - name: Upload portable Windows setup package
         uses: actions/upload-artifact@v4
         with:
-          name: MediaAIStudio-PC-Setup-v1.8.0
-          path: ${{ runner.temp }}/MediaAIStudio-PC-Setup-v1.8.0.zip
+          name: MediaAIStudio-PC-Setup-v1.8.1
+          path: ${{ runner.temp }}/MediaAIStudio-PC-Setup-v1.8.1.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -73,12 +73,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="pc-v1.8.0"
-          asset="$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.0.zip"
-          notes=$(printf "MediaAIStudio PC 1.8.0\\n\\nStandalone Windows workspace package. Includes Camera studio with USB/webcam access, IP/RTSP support through FFmpeg, ONVIF discovery, and verified Desktop + Start Menu shortcuts.\\n\\nPhone-to-PC live camera relay is not included in this release.")
+          tag="pc-v1.8.1"
+          asset="$RUNNER_TEMP/MediaAIStudio-PC-Setup-v1.8.1.zip"
+          notes=$(printf "MediaAIStudio PC 1.8.1\\n\\nStandalone Windows workspace package. Includes Camera studio with USB/webcam access, IP/RTSP support through FFmpeg, ONVIF discovery, and verified Desktop + Start Menu shortcuts.\\n\\nIncludes QR-based phone-to-PC live camera pairing over a secure temporary signaling link and direct WebRTC video.")
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$asset" --clobber
-            gh release edit "$tag" --title "MediaAIStudio PC 1.8.0" --notes "$notes" --prerelease=false
+            gh release edit "$tag" --title "MediaAIStudio PC 1.8.1" --notes "$notes" --prerelease=false
           else
-            gh release create "$tag" "$asset" --title "MediaAIStudio PC 1.8.0" --notes "$notes" --latest=false
+            gh release create "$tag" "$asset" --title "MediaAIStudio PC 1.8.1" --notes "$notes" --latest=false
           fi

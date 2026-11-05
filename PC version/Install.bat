@@ -81,7 +81,23 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/6] Configuring the local backend...
+echo [6/7] Preparing secure Wi-Fi phone camera pairing...
+where cloudflared >nul 2>nul
+if errorlevel 1 (
+  where winget >nul 2>nul
+  if errorlevel 1 (
+    echo Cloudflare Tunnel was not found. Wi-Fi QR camera pairing will remain unavailable until it is installed.
+    echo Install it later with: winget install --id Cloudflare.cloudflared
+  ) else (
+    winget install --id Cloudflare.cloudflared --exact --silent --accept-package-agreements --accept-source-agreements
+    if errorlevel 1 echo Cloudflare Tunnel installation failed. You can retry later with: winget install --id Cloudflare.cloudflared
+  )
+) else (
+  echo Secure tunnel component is already installed.
+)
+
+echo.
+echo [7/7] Configuring the local backend...
 if not exist "backend\.env" (
   set /p GEMINI_KEY=Paste your Gemini API key (press Enter to skip): 
   set /p FAL_KEY=Paste your FAL API key (optional, press Enter to skip): 

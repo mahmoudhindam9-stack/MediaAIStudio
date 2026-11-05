@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090b12"><title>MediaAIStudio Phone Camera</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#090b12;color:#eef0f7;font:16px system-ui,sans-serif;display:grid;place-items:center;padding:22px}.card{width:min(100%,520px);padding:24px;border:1px solid #34304a;border-radius:20px;background:linear-gradient(145deg,#1b1a2c,#111a25)}h1{font-size:23px;margin:8px 0}p{color:#aab2c4;font-size:14px;line-height:1.6}.tag{color:#b9a6fa;font-size:11px;letter-spacing:2px;font-weight:700}video{width:100%;aspect-ratio:4/3;object-fit:cover;background:#05070c;border-radius:13px;margin:14px 0}button{width:100%;border:0;border-radius:10px;padding:15px;background:linear-gradient(110deg,#bba8ff,#6ddbd1);font-weight:700;color:#10131a;font-size:15px}button:disabled{opacity:.55}#status{font-size:13px;color:#78dfba;margin-top:12px;min-height:24px}.hint{font-size:12px;color:#8f9ab0}
+</style></head><body><main class="card"><div class="tag">MEDIAAISTUDIO · WIRELESS CAMERA</div><h1>Connect this phone camera</h1><p>Keep this page open. Allow camera access when asked. The live camera feed will be sent directly to the paired MediaAIStudio computer over an encrypted WebRTC connection.</p><video id="preview" autoplay playsinline muted></video><button id="start">Start phone camera</button><div id="status">Waiting to connect to the computer…</div><p class="hint">Use the same Wi-Fi network as the computer. The camera stream is peer-to-peer; the temporary secure link is used only to establish the connection.</p></main><script>
+const params=new URLSearchParams(location.search), id=params.get('s'), statusEl=document.getElementById('status'), button=document.getElementById('start'), video=document.getElementById('preview');
+let pc, stream, stopped=false;
+const api=(method,body)=>fetch('/api/phone/'+encodeURIComponent(id),{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}).then(async r=>{const d=await r.json();if(!r.ok)throw Error(d.error||'Connection failed');return d});
+const waitIce=pc=>new Promise(resolve=>{if(pc.iceGatheringState==='complete')return resolve();const timer=setTimeout(resolve,12000);pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(timer);resolve()}},{once:false})});
+button.onclick=async()=>{button.disabled=true;try{
+ if(!id)throw Error('This QR code is incomplete. Scan the code displayed by your computer again.');
+ statusEl.textContent='Requesting camera permission…';
+ stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+ video.srcObject=stream;
+ pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+ stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+ pc.onconnectionstatechange=()=>{statusEl.textContent='Camera link: '+pc.connectionState};
+ statusEl.textContent='Waiting for the computer to prepare the connection…';
+ let offer;
+ for(let i=0;i<40&&!offer;i++){if(stopped)return;try{const d=await api('GET');offer=d.offer||null}catch(e){throw e}if(!offer)await new Promise(r=>setTimeout(r,750))}
+ if(!offer)throw Error('The computer did not respond. Refresh the QR code and try again.');
+ await pc.setRemoteDescription(offer);
+ const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await waitIce(pc);
+ await api('POST',{answer:pc.localDescription});
+ statusEl.textContent='Connected. Keep this page open to share the live camera.';
+ button.textContent='Camera connected';button.disabled=true;
+ }catch(e){statusEl.textContent=e.message||'Could not connect.';button.disabled=false;}}
+window.addEventListener('pagehide',()=>{stopped=true;stream?.getTracks().forEach(t=>t.stop());pc?.close()});
+</script></body></html>
