@@ -10,6 +10,7 @@ on:
     paths:
       - "pc/**"
       - "PC version/**"
+      - "PC version/**"
       - ".github/workflows/pc-web.yml"
 jobs:
   build:
