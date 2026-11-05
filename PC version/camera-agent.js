@@ -10,6 +10,13 @@ const { spawn } = require('child_process');
 
 const PORT = Number(process.env.CAMERA_AGENT_PORT || 3101);
 const TOKEN = String(process.env.CAMERA_AGENT_TOKEN || '');
+const PAIR_CODE = String(process.env.CAMERA_PAIR_CODE || '');
+const PAIR_EXPIRES_AT = Date.now() + 10 * 60 * 1000;
+const sessions = new Map();
+let pairCodeUsed = false;
+let pairFailures = 0;
+let pairBlockedUntil = 0;
+const extraOrigins = new Set(String(process.env.CAMERA_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean));
 const FFMPEG = String(process.env.FFMPEG_PATH || 'ffmpeg');
 const MEDIA_DIR = path.join(os.tmpdir(), 'mediaaistudio-camera');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -166,10 +173,33 @@ function discoverOnvif() {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
+  const corsAllowed = applyCors(req, res);
+  if (req.method === 'OPTIONS') return res.writeHead(corsAllowed ? 204 : 403).end();
+  if (req.method === 'POST' && url.pathname === '/pair') {
+    if (!corsAllowed) return send(res, 403, { error: 'ORIGIN_NOT_ALLOWED' });
+    if (Date.now() < pairBlockedUntil) return send(res, 429, { error: 'PAIR_RATE_LIMITED', message: 'Wait before trying another pairing code.' });
+    try {
+      const body = await readJson(req);
+      const supplied = Buffer.from(String(body.code || '').trim());
+      const expected = Buffer.from(PAIR_CODE);
+      const valid = !pairCodeUsed && Date.now() < PAIR_EXPIRES_AT && expected.length > 0 && supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+      if (!valid) {
+        pairFailures += 1;
+        if (pairFailures >= 8) pairBlockedUntil = Date.now() + 5 * 60 * 1000;
+        return send(res, 401, { error: 'PAIR_CODE_INVALID', message: 'The pairing code is invalid, expired, or already used.' });
+      }
+      pairCodeUsed = true;
+      pairFailures = 0;
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = Date.now() + 4 * 60 * 60 * 1000;
+      sessions.set(sessionToken, { expiresAt });
+      return send(res, 200, { token: sessionToken, expiresAt });
+    } catch (error) { return send(res, 400, { error: 'PAIR_REQUEST_INVALID', message: error.message }); }
+  }
   if (!authorized(req)) return send(res, 401, { error: 'UNAUTHORIZED' });
   if (req.method === 'GET' && url.pathname === '/health') {
     const ffmpeg = await ffmpegAvailable();
-    return send(res, 200, { status: 'ok', ffmpeg, rtsp: streamState });
+    return send(res, 200, { status: 'ok', ffmpeg, rtsp: streamState, pairCode: suppliedToken(req) === TOKEN && !pairCodeUsed && Date.now() < PAIR_EXPIRES_AT ? PAIR_CODE : null, pairCodeExpiresAt: PAIR_EXPIRES_AT });
   }
   if (req.method === 'POST' && url.pathname === '/onvif/discover') {
     const result = await discoverOnvif();
