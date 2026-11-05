@@ -4,3 +4,6 @@
 
 
 .onvif-list{display:grid;gap:8px;margin-top:4px}.onvif-item{display:grid;gap:5px;padding:10px;border:1px solid #39445c;border-radius:8px;background:#101827}.onvif-item b{font-size:10px;color:#e8edf7}.onvif-item small{font-size:9px;color:#a3aec3;overflow-wrap:anywhere}.onvif-item .camera-link{font-size:9px}.camera-link:disabled{opacity:.5;cursor:wait}
+
+
+.camera-pair-panel{margin:0 0 16px;border-color:#4a426c;background:linear-gradient(130deg,#211d36,#141d2b)}.camera-pair-panel h2{font:600 17px 'Space Grotesk';margin:8px 0}.camera-pair-panel p{font-size:10px;line-height:1.7;color:#b2bad0;max-width:760px}.camera-pair-panel small{display:block;font-size:9px;line-height:1.6;color:#9ca8bd;margin-top:10px}.camera-pair-row{display:flex;gap:9px;max-width:460px}.camera-pair-row input{flex:1;min-width:0;border:1px solid #414b64;border-radius:9px;background:#0c111b;color:#fff;padding:10px 12px;font-size:12px;letter-spacing:2px}.camera-pair-row .primary{margin:0;white-space:nowrap}.camera-pair-code{display:inline-block;margin:5px 0;padding:10px 18px;border-radius:10px;background:#0c111b;border:1px dashed #a99af0;color:#e6ddff;font:700 24px 'Space Grotesk';letter-spacing:5px}@media(max-width:500px){.camera-pair-row{flex-direction:column}.camera-pair-row .primary{align-self:flex-start}}
