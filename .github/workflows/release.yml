@@ -15,6 +15,7 @@ jobs:
       MEDIA_AI_BACKEND_URL: ${{ secrets.MEDIA_AI_BACKEND_URL }}
       MEDIA_AI_BACKEND_API_KEY: ${{ secrets.MEDIA_AI_BACKEND_API_KEY }}
       PERMANENT_RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
+      PERMANENT_RELEASE_CERT_SHA256: ${{ secrets.RELEASE_CERT_SHA256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
