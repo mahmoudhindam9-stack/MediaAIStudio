@@ -56,7 +56,26 @@ call npm run build --prefix "web"
 if errorlevel 1 goto :failed
 
 echo.
-echo [5/5] Configuring the local backend...
+echo [5/6] Checking optional FFmpeg support for IP cameras...
+where ffmpeg >nul 2>nul
+if errorlevel 1 (
+  echo FFmpeg enables RTSP-to-HLS conversion and Windows camera discovery.
+  where winget >nul 2>nul
+  if errorlevel 1 (
+    echo winget was not found. You can install FFmpeg later from https://ffmpeg.org/download.html
+  ) else (
+    set /p INSTALL_FFMPEG=Install FFmpeg now using winget? [Y/N]: 
+    if /I "%INSTALL_FFMPEG%"=="Y" (
+      winget install --id Gyan.FFmpeg.Shared --exact --silent --accept-package-agreements --accept-source-agreements
+      if errorlevel 1 echo FFmpeg installation did not complete. USB cameras will still work; RTSP support can be installed later.
+    )
+  )
+) else (
+  ffmpeg -version
+)
+
+echo.
+echo [6/6] Configuring the local backend...
 if not exist "backend\.env" (
   set /p GEMINI_KEY=Paste your Gemini API key (press Enter to skip): 
   set /p FAL_KEY=Paste your FAL API key (optional, press Enter to skip): 
