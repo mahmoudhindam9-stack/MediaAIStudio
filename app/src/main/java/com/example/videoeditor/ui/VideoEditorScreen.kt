@@ -290,6 +290,7 @@ fun VideoEditorScreen(
     }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             com.example.ui.components.AppTopBar(
                 title = "Video Editor",
