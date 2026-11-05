@@ -16,7 +16,8 @@ export default function CameraPage() {
   const agentBase = isLocalApp ? '/api/camera' : 'http://127.0.0.1:3101';
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const hlsRef = useRef<Hls | null>(null);\n  const phonePeerRef = useRef<RTCPeerConnection | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
+  const phonePeerRef = useRef<RTCPeerConnection | null>(null);
   const [source, setSource] = useState<Source>('usb');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
@@ -74,7 +75,9 @@ export default function CameraPage() {
     }
   }, [agentFetch, agentToken, isLocalApp]);
 
-  const stopCamera = useCallback(async () => {\n    phonePeerRef.current?.close();\n    phonePeerRef.current = null;
+  const stopCamera = useCallback(async () => {
+    phonePeerRef.current?.close();
+    phonePeerRef.current = null;
     streamRef.current?.getTracks().forEach(track => track.stop());
     streamRef.current = null;
     hlsRef.current?.destroy();
@@ -125,7 +128,9 @@ export default function CameraPage() {
       const session = await fetch('/api/phone-relay/session', { method: 'POST' }).then(async r => {
         const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Could not create a pairing session.'); return d;
       });
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });\n      phonePeerRef.current = pc;\n      pc.addTransceiver('video', { direction: 'recvonly' });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      phonePeerRef.current = pc;
+      pc.addTransceiver('video', { direction: 'recvonly' });
       const remote = new MediaStream();
       if (videoRef.current) videoRef.current.srcObject = remote;
       pc.ontrack = event => {
