@@ -14,12 +14,23 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  // Build ABI-specific APKs so each Android device downloads only its native libraries.
+  // Keep all four supported ABIs; no AI or camera functionality is removed.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+      isUniversalApk = false
+    }
+  }
+
   defaultConfig {
     applicationId = "com.example.mediaaistudio"
     minSdk = 24
     targetSdk = 36
-    versionCode = 12
-    versionName = "1.7.0"
+    versionCode = 13
+    versionName = "1.7.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -109,6 +120,7 @@ android {
     release {
       isCrunchPngs = false
       isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = if (hasProductionSigning) {
         signingConfigs.getByName("release")

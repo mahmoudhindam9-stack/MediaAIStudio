@@ -133,8 +133,12 @@ jobs:
           RELEASE_CERT_SECRET: ${{ secrets.RELEASE_CERT_SHA256 }}
         run: |
           set -o pipefail
-          apk=$(compgen -G "$ASSET_GLOB" | head -n1)
-          test -f "$apk"
+          shopt -s nullglob
+          apks=( $ASSET_GLOB )
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::No ABI-specific Release APKs were produced."
+            exit 1
+          fi
 
           APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | sort -V | tail -n1)
           if [ ! -x "$APKSIGNER" ]; then
@@ -142,45 +146,31 @@ jobs:
             exit 1
           fi
 
-          echo "Verifying APK signature using apksigner..."
-          SIG_OUTPUT=$("$APKSIGNER" verify --print-certs -v "$apk")
+          EXPECTED_SHA256=$(echo "$RELEASE_CERT_SECRET" | tr '[:upper:]' '[:lower:]' | tr -d ':')
+          CERT_FINGERPRINT=""
+          for apk in "${apks[@]}"; do
+            echo "Verifying $(basename "$apk")..."
+            "$APKSIGNER" verify --print-certs -v "$apk" > signer.txt
+            ACTUAL_SHA256=$(grep -m1 "Signer #1 certificate SHA-256 digest:" signer.txt | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
+            if [ -z "$ACTUAL_SHA256" ]; then
+              ACTUAL_SHA256=$(grep -m1 "SHA-256 digest:" signer.txt | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
+            fi
+            if [ -z "$ACTUAL_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+              echo "::error::Missing or mismatched permanent signature for $(basename "$apk")."
+              exit 1
+            fi
+            if [ -n "$CERT_FINGERPRINT" ] && [ "$CERT_FINGERPRINT" != "$ACTUAL_SHA256" ]; then
+              echo "::error::ABI APKs were signed by different certificates."
+              exit 1
+            fi
+            CERT_FINGERPRINT="$ACTUAL_SHA256"
+            APK_SHA256=$(sha256sum "$apk" | awk '{print $1}')
+            echo "$APK_SHA256  $(basename "$apk")" > "${apk}.sha256"
+          done
 
-          ACTUAL_SHA256=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-256 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
-          ACTUAL_SHA1=$(echo "$SIG_OUTPUT" | grep -m1 "SHA-1 digest:" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | tr -d ':')
-
-          EXPECTED_SHA256=$(echo "${RELEASE_CERT_SECRET:-62a820f073d4797e2da54338d447b0317d225f501c4e9b8811d8a30c8494ab74}" | tr '[:upper:]' '[:lower:]' | tr -d ':')
-
-          echo "=========================================="
-          echo "  Release APK Verification Fingerprints:  "
-          echo "  Actual Certificate SHA-256:   $ACTUAL_SHA256"
-          echo "  Actual Certificate SHA-1:     $ACTUAL_SHA1"
-          echo "  Expected Permanent SHA-256:   $EXPECTED_SHA256"
-          echo "=========================================="
-
-          # Clean up decrypted temporary keystore immediately
-          rm -f /tmp/release.keystore
-
-          if [ -z "$ACTUAL_SHA256" ]; then
-            echo "::error::Unable to extract certificate SHA-256 fingerprint from release APK!"
-            exit 1
-          fi
-
-          if [ -n "$EXPECTED_SHA256" ] && [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "::error::SIGNER MISMATCH! APK signing SHA-256 ($ACTUAL_SHA256) does not match the permanent release certificate ($EXPECTED_SHA256). Aborting release."
-            exit 1
-          fi
-
-          # Calculate APK file SHA-256 checksum
-          APK_SHA256=$(sha256sum "$apk" | awk '{print $1}')
-          echo "apk_sha256=$APK_SHA256" >> "$GITHUB_OUTPUT"
-          echo "cert_sha256=$ACTUAL_SHA256" >> "$GITHUB_OUTPUT"
-
-          # Write standalone checksum asset
-          echo "$APK_SHA256  $(basename "$apk")" > "${apk}.sha256"
-
-          echo "Success: Release APK verified with permanent signing key."
-          echo "APK File SHA-256: $APK_SHA256"
-
+          rm -f /tmp/release.keystore signer.txt
+          echo "cert_sha256=$CERT_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "Verified ${#apks[@]} ABI APKs with the same permanent release certificate."
       - name: Publish GitHub Release
         shell: bash
         env:
@@ -188,20 +178,23 @@ jobs:
           ASSET_GLOB: ${{ steps.release_build.outputs.asset_glob }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
-          APK_SHA256: ${{ steps.verify_apk.outputs.apk_sha256 }}
           CERT_SHA256: ${{ steps.verify_apk.outputs.cert_sha256 }}
         run: |
           tag="v${VERSION_NAME}"
-          apk=$(compgen -G "$ASSET_GLOB" | head -n1)
-          test -n "$apk"
-          checksum_asset="${apk}.sha256"
+          shopt -s nullglob
+          apks=( $ASSET_GLOB )
+          assets=()
+          for apk in "${apks[@]}"; do
+            assets+=("$apk" "${apk}.sha256")
+          done
+          test "${#assets[@]}" -gt 0
 
           title="MediaAIStudio $VERSION_NAME"
-          notes=$(printf "MediaAIStudio %s (versionCode %s)\n\nSHA256: %s\nCertificate SHA-256: %s\n\nSigned with the official permanent release key.\nNote: Installations previously signed with the legacy temporary v1.3.4 debug key cannot be updated in-place and require a clean install." "$VERSION_NAME" "$VERSION_CODE" "$APK_SHA256" "$CERT_SHA256")
+          notes=$(printf "MediaAIStudio %s (versionCode %s)\\n\\nFour ABI-specific APKs are provided (arm64-v8a, armeabi-v7a, x86, x86_64). Install the APK matching your device CPU architecture.\\n\\nAll APKs passed apksigner verification with permanent certificate SHA-256: %s.\\n\\nChecksums are attached beside each APK." "$VERSION_NAME" "$VERSION_CODE" "$CERT_SHA256")
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; uploading rebuilt APK and checksum..."
-            gh release upload "$tag" "$apk" "$checksum_asset" --clobber
+            echo "Release $tag already exists; uploading ABI APKs and checksums..."
+            gh release upload "$tag" "${assets[@]}" --clobber
             gh release edit "$tag" --title "$title" --notes "$notes" --prerelease=false
             exit 0
           fi
@@ -213,7 +206,7 @@ jobs:
             git push origin "$tag"
           fi
 
-          gh release create "$tag" "$apk" "$checksum_asset" --title "$title" --notes "$notes"
+          gh release create "$tag" "${assets[@]}" --title "$title" --notes "$notes"
 
       - name: Upload build log
         if: always()
