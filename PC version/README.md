@@ -41,3 +41,12 @@ The Windows launcher also starts a separate local camera companion at 127.0.0.1:
 - The camera companion binds to loopback only; it is not exposed to the LAN or public internet.
 
 The phone-camera option uses the camera on the device currently viewing the app. Phone-to-PC live relay/QR pairing is a separate secure networking feature and is not claimed as complete in this release. RTSP support depends on the camera exposing a reachable RTSP stream and FFmpeg having the required codecs.
+
+### Pairing the Vercel camera page with the local Windows helper
+
+1. Start the Windows app and open Camera studio locally. It displays a one-time 8-digit pairing code.
+2. Open the Vercel Camera studio page in a browser on that same Windows PC and enter the code.
+3. The helper accepts one pairing, allows the paired browser session for four hours, and keeps the camera companion bound to 127.0.0.1. The browser token remains in memory and is not saved to local storage.
+4. The helper permits HTTPS Vercel origins for this pairing endpoint. Browser local-network permission prompts may appear depending on browser version and policy.
+
+The one-time code expires after 10 minutes and is rate-limited. Restart the local app to generate a fresh code after it is used or expires. The phone camera can be used when the page is opened on the phone, but this does not yet relay live phone video to the PC.
