@@ -254,8 +254,7 @@ const server = http.createServer(async (req, res) => {
       if (error) return send(res, 404, { error: 'STREAM_NOT_READY' });
       res.writeHead(200, {
         'Content-Type': filename.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',
-        'Cache-Control': 'no-store',
-        'Access-Control-Allow-Origin': '*'
+        'Cache-Control': 'no-store'
       });
       res.end(data);
     });
