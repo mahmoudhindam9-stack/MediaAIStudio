@@ -1,0 +1,26 @@
+name: MediaAIStudio PC workspace
+on:
+  pull_request:
+    paths:
+      - "pc/**"
+      - ".github/workflows/pc-web.yml"
+  push:
+    branches: [main]
+    paths:
+      - "pc/**"
+      - ".github/workflows/pc-web.yml"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pc/package-lock.json
+      - run: npm install
+      - run: npm run build
