@@ -64,6 +64,7 @@ fun PhotoEditorScreen(
     }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = { Text("") },
